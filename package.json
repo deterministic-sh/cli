@@ -1,0 +1,28 @@
+{
+  "name": "@deterministic-sh/cli",
+  "version": "0.0.0",
+  "description": "Validation CLI (det) — thin typed client over /api/v1/validate.",
+  "author": "Applied Worlds",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deterministic-sh/cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/deterministic-sh/cli/issues"
+  },
+  "homepage": "https://github.com/deterministic-sh/cli#readme",
+  "type": "module",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "bin": {
+    "det": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "private": true
+}
