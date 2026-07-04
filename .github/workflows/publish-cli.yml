@@ -281,4 +281,4 @@ jobs:
       - name: Publish
         env:
           TARBALL_NAME: ${{ needs.prepare.outputs.tarball-name }}
-        run: npm publish "cli-publish-payload/$TARBALL_NAME" --access public
+        run: npm publish "./cli-publish-payload/$TARBALL_NAME" --access public
