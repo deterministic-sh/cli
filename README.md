@@ -10,7 +10,7 @@ det get report <id>
 det auth login | logout | whoami
 ```
 
-Reference docs: [docs.deterministic.dev/cli](https://docs.deterministic.dev/cli/).
+Reference docs: [deterministic.sh/docs/cli](https://deterministic.sh/docs/cli/).
 
 ## Install
 
