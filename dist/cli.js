@@ -805,7 +805,7 @@ async function deleteCredentials(env = process.env) {
 }
 
 // src/config/resolve.ts
-var DEFAULT_HOST = "https://deterministic.app";
+var DEFAULT_HOST = "https://deterministic.sh";
 var ResolveAuthError = class extends Error {
   constructor(detail) {
     super(`resolveAuth: ${detail.kind}`);
