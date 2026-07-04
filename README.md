@@ -14,17 +14,15 @@ Reference docs: [docs.deterministic.dev/cli](https://docs.deterministic.dev/cli/
 
 ## Install
 
-The npm package is `@deterministic-sh/cli`; it is **not published yet** — the
-first release is tracked publicly. Until then, design partners receive the
-preview build through their onboarding channel. Once published:
-
 ```bash
 npm install -g @deterministic-sh/cli
 det --version
 ```
 
 Runtime: Node.js 22.14+. The CLI ships as a single-file ES-module bundle with
-zero runtime dependencies.
+zero runtime dependencies, published with npm provenance via Trusted Publishers
+OIDC from this repository. If the version you need is not on npm yet, design
+partners receive preview builds through their onboarding channel.
 
 ## About this repository
 

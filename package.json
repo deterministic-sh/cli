@@ -1,6 +1,6 @@
 {
   "name": "@deterministic-sh/cli",
-  "version": "0.0.0",
+  "version": "0.0.1-alpha.0",
   "description": "Validation CLI (det) — thin typed client over /api/v1/validate.",
   "author": "Applied Worlds",
   "license": "MIT",
@@ -23,6 +23,5 @@
   },
   "engines": {
     "node": ">=22.14.0"
-  },
-  "private": true
+  }
 }
