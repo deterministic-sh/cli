@@ -575,7 +575,7 @@ function _getBuiltinFlags(long, short, userNames, userAliases) {
 // src/cli.ts
 import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import path2 from "node:path";
+import path3 from "node:path";
 
 // src/config/credentials.ts
 import { open, lstat, mkdir, rename, unlink } from "node:fs/promises";
@@ -2150,10 +2150,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path3) {
-  if (!path3)
+function getElementAtPath(obj, path4) {
+  if (!path4)
     return obj;
-  return path3.reduce((acc, key) => acc?.[key], obj);
+  return path4.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -2562,11 +2562,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path3, issues) {
+function prefixIssues(path4, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path3);
+    iss.path.unshift(path4);
     return iss;
   });
 }
@@ -2713,16 +2713,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path3 = []) => {
+  const processError = (error52, path4 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path3, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path4, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path3, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path4, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path3, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path4, ...issue2.path]);
       } else {
-        const fullpath = [...path3, ...issue2.path];
+        const fullpath = [...path4, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -2749,17 +2749,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path3 = []) => {
+  const processError = (error52, path4 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path3, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path4, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path3, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path4, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path3, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path4, ...issue2.path]);
       } else {
-        const fullpath = [...path3, ...issue2.path];
+        const fullpath = [...path4, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -2791,8 +2791,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path3 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path3) {
+  const path4 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path4) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -15484,13 +15484,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path3 = ref.slice(1).split("/").filter(Boolean);
-  if (path3.length === 0) {
+  const path4 = ref.slice(1).split("/").filter(Boolean);
+  if (path4.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path3[0] === defsKey) {
-    const key = path3[1];
+  if (path4[0] === defsKey) {
+    const key = path4[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -16147,15 +16147,15 @@ var DESCRIPTIVE_PATH_SET = new Set(CONTEXT_DESCRIPTIVE_PATHS);
 var CONTEXT_PARAMETERS_KEY_SET = new Set(
   CONTEXT_PARAMETERS_VERDICT_KEYS
 );
-function isAllowedContextParametersPath(path3) {
-  if (!path3.startsWith(CONTEXT_PARAMETERS_PREFIX)) return false;
-  const key = path3.slice(CONTEXT_PARAMETERS_PREFIX.length);
+function isAllowedContextParametersPath(path4) {
+  if (!path4.startsWith(CONTEXT_PARAMETERS_PREFIX)) return false;
+  const key = path4.slice(CONTEXT_PARAMETERS_PREFIX.length);
   return CONTEXT_PARAMETERS_KEY_SET.has(key);
 }
-function isAllowedContextProvenancePath(path3) {
-  if (VERDICT_PATH_SET.has(path3)) return true;
-  if (DESCRIPTIVE_PATH_SET.has(path3)) return true;
-  return isAllowedContextParametersPath(path3);
+function isAllowedContextProvenancePath(path4) {
+  if (VERDICT_PATH_SET.has(path4)) return true;
+  if (DESCRIPTIVE_PATH_SET.has(path4)) return true;
+  return isAllowedContextParametersPath(path4);
 }
 
 // ../validation-engine/src/request.ts
@@ -16673,11 +16673,11 @@ var OVERRIDES = [
 function isPlainObject2(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
-function setPath(obj, path3, value) {
-  if (path3.length === 0) return;
+function setPath(obj, path4, value) {
+  if (path4.length === 0) return;
   let cur = obj;
-  for (let i = 0; i < path3.length - 1; i++) {
-    const seg = path3[i];
+  for (let i = 0; i < path4.length - 1; i++) {
+    const seg = path4[i];
     if (seg === void 0) return;
     const next = cur[seg];
     if (isPlainObject2(next)) {
@@ -16687,7 +16687,7 @@ function setPath(obj, path3, value) {
     }
     cur = cur[seg];
   }
-  const last = path3[path3.length - 1];
+  const last = path4[path4.length - 1];
   if (last !== void 0) cur[last] = value;
 }
 function mergeFlags(bundle, flags) {
@@ -16713,6 +16713,389 @@ function preflight(body) {
       message: issue2.message
     }))
   };
+}
+
+// src/subprocess/reducer.ts
+var DETERMINISTIC_EXTRACT_VERSION = "0.0.1";
+var REDUCER_PACKAGE = "deterministic-extract";
+var ReducerResolutionError = class extends Error {
+  kind;
+  constructor(kind, message) {
+    super(message);
+    this.name = "ReducerResolutionError";
+    this.kind = kind;
+  }
+};
+function uvxOptedIn(deps) {
+  return deps.allowUvxFlag || deps.env.DETERMINISTIC_EXTRACT_ALLOW_UVX === "1";
+}
+function resolveReducer(deps) {
+  const bin = deps.env.DETERMINISTIC_EXTRACT_BIN;
+  if (bin) {
+    return { source: "env", command: bin, prefixArgs: [] };
+  }
+  const onPath = deps.pathLookup(REDUCER_PACKAGE);
+  if (onPath) {
+    return { source: "path", command: onPath, prefixArgs: [] };
+  }
+  if (uvxOptedIn(deps)) {
+    return {
+      source: "uvx",
+      command: "uvx",
+      prefixArgs: [`${REDUCER_PACKAGE}==${DETERMINISTIC_EXTRACT_VERSION}`]
+    };
+  }
+  throw new ReducerResolutionError(
+    "not_found",
+    `reducer "${REDUCER_PACKAGE}" not found. Install it (pip install '${REDUCER_PACKAGE}[vtk]==${DETERMINISTIC_EXTRACT_VERSION}'), set DETERMINISTIC_EXTRACT_BIN=<path>, or opt in to the pinned uvx fetch with --allow-uvx / DETERMINISTIC_EXTRACT_ALLOW_UVX=1.`
+  );
+}
+function mapReducerExit(code, signal) {
+  if (signal !== null) return 4;
+  if (code === 0) return 0;
+  if (code === 2) return 2;
+  return 4;
+}
+function runReducer(resolution, reducerArgs, spawn) {
+  const argv = [...resolution.prefixArgs, ...reducerArgs];
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (code) => {
+      if (settled) return;
+      settled = true;
+      resolve(code);
+    };
+    const child = spawn(resolution.command, argv);
+    child.on("error", (err) => finish(err.code === "ENOENT" ? 2 : 4));
+    child.on("exit", (code, signal) => finish(mapReducerExit(code, signal)));
+  });
+}
+var DEFAULT_MAX_CAPTURE_BYTES = 128 * 1024 * 1024;
+function runReducerCapture(resolution, reducerArgs, spawn, maxBytes = DEFAULT_MAX_CAPTURE_BYTES) {
+  const argv = [...resolution.prefixArgs, ...reducerArgs];
+  return new Promise((resolve) => {
+    let settled = false;
+    const chunks = [];
+    let captured = 0;
+    let overflow = false;
+    const finish = (exit) => {
+      if (settled) return;
+      settled = true;
+      resolve({ exit, stdout: Buffer.concat(chunks).toString("utf8"), overflow });
+    };
+    const child = spawn(resolution.command, argv);
+    child.stdout?.on("data", (chunk) => {
+      if (overflow) return;
+      const buf = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
+      if (captured + buf.byteLength > maxBytes) {
+        overflow = true;
+        return;
+      }
+      captured += buf.byteLength;
+      chunks.push(buf);
+    });
+    child.on("error", (err) => finish(err.code === "ENOENT" ? 2 : 4));
+    child.on("exit", (code, signal) => finish(mapReducerExit(code, signal)));
+  });
+}
+
+// src/subprocess/path-lookup.ts
+import { statSync, constants as fsConstants2, accessSync } from "node:fs";
+import path2 from "node:path";
+function lookupOnPath(command, env = process.env) {
+  const rawPath = env.PATH ?? "";
+  if (!rawPath) return null;
+  const dirs = rawPath.split(path2.delimiter).filter(Boolean);
+  const exts = process.platform === "win32" ? (env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";").filter(Boolean) : [""];
+  for (const dir of dirs) {
+    for (const ext of exts) {
+      const candidate = path2.join(dir, command + ext);
+      try {
+        if (!statSync(candidate).isFile()) continue;
+        accessSync(candidate, fsConstants2.X_OK);
+        return candidate;
+      } catch {
+      }
+    }
+  }
+  return null;
+}
+
+// src/subprocess/spawn.ts
+import { spawn as nodeSpawn } from "node:child_process";
+var defaultSpawn = (command, args) => nodeSpawn(command, [...args], { stdio: "inherit", shell: false });
+var defaultCaptureSpawn = (command, args) => nodeSpawn(command, [...args], { stdio: ["ignore", "pipe", "inherit"], shell: false });
+
+// src/commands/extract.ts
+function buildReducerArgs(args) {
+  if (!args.out) {
+    return { ok: false, message: "missing required --out <path>" };
+  }
+  const modes = [args.surface !== void 0, args.allSurfaces === true, args.probe !== void 0];
+  const modeCount = modes.filter(Boolean).length;
+  if (modeCount === 0) {
+    return { ok: false, message: "select one of --surface <name>, --all-surfaces, or --probe <p1> --probe-to <p2>" };
+  }
+  if (modeCount > 1) {
+    return { ok: false, message: "--surface, --all-surfaces, and --probe are mutually exclusive" };
+  }
+  const argv = [args.input, "--out", args.out];
+  if (args.emit === "evidence-json") argv.push("--emit", "evidence-json");
+  if (args.fields) argv.push("--fields", args.fields);
+  if (args.probe !== void 0) {
+    if (!args.probeTo) {
+      return { ok: false, message: "--probe requires --probe-to <p2> (the line endpoint)" };
+    }
+    argv.push("--probe", args.probe, args.probeTo);
+    if (args.resolution) argv.push("--resolution", args.resolution);
+  } else if (args.allSurfaces) {
+    argv.push("--surface");
+  } else if (args.surface !== void 0) {
+    argv.push("--surface", args.surface);
+  }
+  return { ok: true, argv };
+}
+var extractCommand = defineCommand({
+  meta: {
+    name: "extract",
+    description: "Reduce a CFD output file to a Parquet extract via deterministic-extract (local)."
+  },
+  args: {
+    input: { type: "positional", required: true, description: "Input CFD file / case dir (VTK/OpenFOAM/EnSight/CGNS/Fluent)." },
+    out: { type: "string", description: "Output parquet path (schema sidecar written alongside)." },
+    surface: { type: "string", description: "Extract a named boundary surface." },
+    "all-surfaces": { type: "boolean", description: "Extract the outer / all surfaces (bare surface mode)." },
+    probe: { type: "string", description: 'Probe line start point "x,y,z" (requires --probe-to).' },
+    "probe-to": { type: "string", description: 'Probe line end point "x,y,z".' },
+    resolution: { type: "string", description: "Probe line resolution (default 100)." },
+    fields: { type: "string", description: "Comma-separated field allowlist (default: all)." },
+    "allow-uvx": { type: "boolean", description: "Opt in to fetching the pinned reducer via uvx if not on PATH (supply-chain: fetches from PyPI)." },
+    verbose: { type: "boolean", description: "Print reducer resolution (source + pinned version) to stderr." }
+  },
+  async run({ args }) {
+    const built = buildReducerArgs({
+      input: args.input,
+      out: args.out,
+      surface: args.surface,
+      allSurfaces: args["all-surfaces"],
+      probe: args.probe,
+      probeTo: args["probe-to"],
+      resolution: args.resolution,
+      fields: args.fields
+    });
+    if (!built.ok) {
+      process.stderr.write(`Error: ${built.message}
+`);
+      process.exit(2);
+    }
+    let resolution;
+    try {
+      resolution = resolveReducer({
+        env: process.env,
+        allowUvxFlag: args["allow-uvx"],
+        pathLookup: (cmd) => lookupOnPath(cmd)
+      });
+    } catch (err) {
+      if (err instanceof ReducerResolutionError) {
+        process.stderr.write(`Error: ${err.message}
+`);
+        process.exit(2);
+      }
+      throw err;
+    }
+    if (args.verbose) {
+      process.stderr.write(
+        `reducer: source=${resolution.source} command=${resolution.command} pinned=${DETERMINISTIC_EXTRACT_VERSION}
+`
+      );
+    }
+    if (resolution.source === "uvx") {
+      process.stderr.write(
+        `note: fetching + running ${resolution.prefixArgs[0]} via uvx (PyPI fetch; provenance pending #668).
+`
+      );
+    }
+    const exit = await runReducer(resolution, built.argv, defaultSpawn);
+    process.exit(exit);
+  }
+});
+
+// src/input/assemble-bundle.ts
+function runtimeType(dtype) {
+  return dtype.startsWith("bool") ? "boolean" : "number";
+}
+var DEFAULT_VERSION = "0.1";
+var DEFAULT_EVIDENCE_ID = "reduced_extract";
+function validateReducerShape(r) {
+  if (!r || typeof r !== "object") return "reducer output is not an object";
+  if (!Array.isArray(r.columns) || r.columns.length === 0) return "reducer output has no columns";
+  if (!r.rows || typeof r.rows !== "object") return "reducer output has no rows";
+  for (const c of r.columns) {
+    if (!(c.name in r.rows)) return `reducer column "${c.name}" missing from rows`;
+  }
+  const lengths = r.columns.map((c) => r.rows[c.name]?.length ?? -1);
+  if (new Set(lengths).size > 1) return "reducer columns have unequal row counts";
+  return null;
+}
+function toRowObjects(r) {
+  const names = r.columns.map((c) => c.name);
+  const n = r.rows[names[0]]?.length ?? 0;
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const row = {};
+    for (const name of names) {
+      row[name] = r.rows[name][i] ?? null;
+    }
+    out.push(row);
+  }
+  return out;
+}
+function assembleBundle(input) {
+  if (!input.domain) {
+    return { ok: false, message: "missing required --domain <domain>" };
+  }
+  const shapeError = validateReducerShape(input.reducer);
+  if (shapeError) {
+    return { ok: false, message: `malformed reducer evidence-json: ${shapeError}` };
+  }
+  const columnRoles = input.columnRoles ?? {};
+  const schema = {};
+  for (const c of input.reducer.columns) {
+    const entry = {
+      type: runtimeType(c.dtype),
+      description: c.dtype
+    };
+    const role = columnRoles[c.name];
+    if (role !== void 0) entry.role = role;
+    schema[c.name] = entry;
+  }
+  const evidence = [
+    {
+      id: input.evidenceId ?? DEFAULT_EVIDENCE_ID,
+      kind: input.kind ?? "table",
+      role: input.role ?? "primary_result",
+      format: "json",
+      schema,
+      value: toRowObjects(input.reducer)
+    }
+  ];
+  const context = { claimed_units: input.claimedUnits ?? {} };
+  if (input.scenario !== void 0) context.scenario = input.scenario;
+  if (input.fluidId !== void 0) context.fluid_id = input.fluidId;
+  const bundle = {
+    version: input.version ?? DEFAULT_VERSION,
+    domain: input.domain,
+    context,
+    evidence
+  };
+  return { ok: true, bundle };
+}
+
+// src/input/prepare-bundle.ts
+var DEFAULT_BODY_CAP_BYTES = 2 * 1024 * 1024;
+function parseKeyVals(raw, flag) {
+  const map2 = {};
+  if (!raw) return { ok: true, map: map2 };
+  for (const pair of raw.split(",")) {
+    const trimmed = pair.trim();
+    if (trimmed === "") continue;
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) {
+      return { ok: false, message: `${flag} entry "${trimmed}" must be key=value` };
+    }
+    map2[trimmed.slice(0, eq)] = trimmed.slice(eq + 1);
+  }
+  return { ok: true, map: map2 };
+}
+function serializedByteLength(bundle) {
+  return new TextEncoder().encode(JSON.stringify(bundle)).byteLength;
+}
+async function runPrepare(args, deps) {
+  if (!args.domain) return { ok: false, exit: 2, message: "missing required --domain <domain>" };
+  if (args.kind !== void 0 && args.kind !== "table" && args.kind !== "series") {
+    return { ok: false, exit: 2, message: '--kind must be "table" or "series"' };
+  }
+  const roles = parseKeyVals(args.roles, "--roles");
+  if (!roles.ok) return { ok: false, exit: 2, message: roles.message };
+  const units = parseKeyVals(args.units, "--units");
+  if (!units.ok) return { ok: false, exit: 2, message: units.message };
+  let bodyCap = DEFAULT_BODY_CAP_BYTES;
+  if (args.bodyCap !== void 0) {
+    const parsed = Number(args.bodyCap);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      return { ok: false, exit: 2, message: "--body-cap must be a positive integer (bytes)" };
+    }
+    bodyCap = parsed;
+  }
+  const built = buildReducerArgs({
+    input: args.input,
+    out: "-",
+    emit: "evidence-json",
+    surface: args.surface,
+    allSurfaces: args.allSurfaces,
+    probe: args.probe,
+    probeTo: args.probeTo,
+    resolution: args.resolution,
+    fields: args.fields
+  });
+  if (!built.ok) return { ok: false, exit: 2, message: built.message };
+  let resolution;
+  try {
+    resolution = resolveReducer({
+      env: deps.env,
+      allowUvxFlag: args.allowUvx ?? false,
+      pathLookup: deps.pathLookup
+    });
+  } catch (err) {
+    if (err instanceof ReducerResolutionError) return { ok: false, exit: 2, message: err.message };
+    throw err;
+  }
+  if (args.verbose) deps.onNote?.(`reducer: source=${resolution.source} command=${resolution.command}`);
+  if (resolution.source === "uvx") {
+    deps.onNote?.(`note: fetching + running ${resolution.prefixArgs[0]} via uvx (PyPI fetch; provenance pending #668).`);
+  }
+  const maxCapture = Math.min(
+    DEFAULT_MAX_CAPTURE_BYTES,
+    Math.max(bodyCap * 8, 16 * 1024 * 1024)
+  );
+  const run = await runReducerCapture(resolution, built.argv, deps.captureSpawn, maxCapture);
+  if (run.exit !== 0) return { ok: false, exit: run.exit };
+  if (run.overflow) {
+    return {
+      ok: false,
+      exit: 2,
+      message: `reducer output exceeded the ${maxCapture}-byte capture limit before assembly. Reduce the extract (coarser --surface, fewer --fields, or a --probe line), or raise --body-cap for a higher tier.`
+    };
+  }
+  let reducerJson;
+  try {
+    reducerJson = JSON.parse(run.stdout);
+  } catch {
+    return { ok: false, exit: 2, message: "reducer did not emit valid evidence-json" };
+  }
+  const assembled = assembleBundle({
+    reducer: reducerJson,
+    domain: args.domain,
+    ...args.kind ? { kind: args.kind } : {},
+    ...args.role ? { role: args.role } : {},
+    columnRoles: roles.map,
+    claimedUnits: units.map,
+    ...args.scenario ? { scenario: args.scenario } : {},
+    ...args.fluidId ? { fluidId: args.fluidId } : {},
+    ...args.evidenceId ? { evidenceId: args.evidenceId } : {}
+  });
+  if (!assembled.ok) return { ok: false, exit: 2, message: assembled.message };
+  const pf = preflight(assembled.bundle);
+  if (!pf.ok) return { ok: false, exit: 2, fieldErrors: pf.fieldErrors };
+  const bytes = serializedByteLength(pf.data);
+  if (bytes > bodyCap) {
+    return {
+      ok: false,
+      exit: 2,
+      message: `assembled bundle is ${bytes} bytes, over the ${bodyCap}-byte body cap. Reduce the extract (coarser --surface, fewer --fields, or a --probe line), or raise --body-cap for a higher tier.`
+    };
+  }
+  return { ok: true, bundle: pf.data, bytes };
 }
 
 // src/output/render-json.ts
@@ -16917,7 +17300,22 @@ var validateCommand = defineCommand({
   },
   args: {
     bundle: { type: "string", description: 'Path to a ValidationRequest JSON file, or "-" for stdin.' },
-    domain: { type: "string", description: "Override domain." },
+    // #740: one-shot reduce→prepare→validate. Mutually exclusive with --bundle.
+    "from-extract": { type: "string", description: "Reduce a CFD file and validate its inline evidence in one step (see `det prepare`)." },
+    surface: { type: "string", description: "[--from-extract] named boundary surface." },
+    "all-surfaces": { type: "boolean", description: "[--from-extract] outer / all surfaces." },
+    probe: { type: "string", description: '[--from-extract] probe line start "x,y,z" (needs --probe-to).' },
+    "probe-to": { type: "string", description: '[--from-extract] probe line end "x,y,z".' },
+    resolution: { type: "string", description: "[--from-extract] probe line resolution." },
+    fields: { type: "string", description: "[--from-extract] comma-separated field allowlist." },
+    kind: { type: "string", description: "[--from-extract] evidence kind: table (default) or series." },
+    role: { type: "string", description: "[--from-extract] evidence artifact role." },
+    roles: { type: "string", description: '[--from-extract] per-column fluid roles "col=dimension,...".' },
+    units: { type: "string", description: '[--from-extract] claimed units "dimension=unit,...".' },
+    "evidence-id": { type: "string", description: "[--from-extract] evidence item id (default reduced_extract)." },
+    "body-cap": { type: "string", description: "[--from-extract] target body cap in bytes." },
+    "allow-uvx": { type: "boolean", description: "[--from-extract] opt in to the pinned uvx reducer fetch." },
+    domain: { type: "string", description: "Override domain (required with --from-extract)." },
     mode: { type: "string", description: "Override mode (instant|flag|gate)." },
     "result-source": { type: "string", description: "Override result_source." },
     scenario: { type: "string", description: "Override context.scenario." },
@@ -16934,36 +17332,114 @@ var validateCommand = defineCommand({
   async run({ args }) {
     const color = process.stdout.isTTY && !process.env.NO_COLOR;
     try {
-      const bundle = await loadBundle({
-        path: args.bundle,
-        stdin: process.stdin
-      });
-      const flags = {
-        domain: args.domain,
-        mode: args.mode,
-        "result-source": args["result-source"],
-        scenario: args.scenario,
-        method: args.method,
-        "operating-regime": args["operating-regime"],
-        "fluid-id": args["fluid-id"],
-        "time-basis": args["time-basis"],
-        "agent-id": args["agent-id"]
-      };
-      const { merged, applied } = mergeFlags(bundle, flags);
-      if (args.verbose && applied.length > 0) {
-        for (const a of applied) process.stderr.write(`override: ${a.path} = ${JSON.stringify(a.value)}
-`);
+      const fromExtract = args["from-extract"];
+      if (fromExtract !== void 0 && args.bundle !== void 0) {
+        process.stderr.write("Error: --from-extract and --bundle are mutually exclusive\n");
+        process.exit(2);
       }
-      const pf = preflight(merged);
-      if (!pf.ok) {
-        const cli = {
-          kind: "caller",
-          code: "invalid_request",
-          message: "request body failed client-side schema preflight",
-          fieldErrors: pf.fieldErrors
+      let requestBody;
+      if (fromExtract !== void 0) {
+        const outcome = await runPrepare(
+          {
+            input: fromExtract,
+            domain: args.domain,
+            surface: args.surface,
+            allSurfaces: args["all-surfaces"],
+            probe: args.probe,
+            probeTo: args["probe-to"],
+            resolution: args.resolution,
+            fields: args.fields,
+            kind: args.kind,
+            role: args.role,
+            roles: args.roles,
+            units: args.units,
+            evidenceId: args["evidence-id"],
+            // Context/top-level overrides are applied via mergeFlags below so
+            // --from-extract honors the same override surface as --bundle (F1).
+            bodyCap: args["body-cap"],
+            allowUvx: args["allow-uvx"],
+            verbose: args.verbose
+          },
+          {
+            env: process.env,
+            pathLookup: (cmd) => lookupOnPath(cmd),
+            captureSpawn: defaultCaptureSpawn,
+            onNote: (line) => process.stderr.write(`${line}
+`)
+          }
+        );
+        if (!outcome.ok) {
+          if (outcome.fieldErrors) {
+            const cli = {
+              kind: "caller",
+              code: "invalid_request",
+              message: "assembled bundle failed client-side schema preflight",
+              fieldErrors: outcome.fieldErrors
+            };
+            process.stderr.write(renderError(cli, { color }));
+          } else if (outcome.message) {
+            process.stderr.write(`Error: ${outcome.message}
+`);
+          }
+          process.exit(outcome.exit);
+        }
+        const flags = {
+          domain: args.domain,
+          mode: args.mode,
+          "result-source": args["result-source"],
+          scenario: args.scenario,
+          method: args.method,
+          "operating-regime": args["operating-regime"],
+          "fluid-id": args["fluid-id"],
+          "time-basis": args["time-basis"],
+          "agent-id": args["agent-id"]
         };
-        process.stderr.write(renderError(cli, { color }));
-        process.exit(exitCodeForError(cli));
+        const { merged } = mergeFlags(outcome.bundle, flags);
+        const pf = preflight(merged);
+        if (!pf.ok) {
+          const cli = {
+            kind: "caller",
+            code: "invalid_request",
+            message: "request body failed client-side schema preflight after overrides",
+            fieldErrors: pf.fieldErrors
+          };
+          process.stderr.write(renderError(cli, { color }));
+          process.exit(exitCodeForError(cli));
+        }
+        requestBody = pf.data;
+      } else {
+        const bundle = await loadBundle({
+          path: args.bundle,
+          stdin: process.stdin
+        });
+        const flags = {
+          domain: args.domain,
+          mode: args.mode,
+          "result-source": args["result-source"],
+          scenario: args.scenario,
+          method: args.method,
+          "operating-regime": args["operating-regime"],
+          "fluid-id": args["fluid-id"],
+          "time-basis": args["time-basis"],
+          "agent-id": args["agent-id"]
+        };
+        const { merged, applied } = mergeFlags(bundle, flags);
+        if (args.verbose && applied.length > 0) {
+          for (const a of applied) process.stderr.write(`override: ${a.path} = ${JSON.stringify(a.value)}
+`);
+        }
+        const pf = preflight(merged);
+        if (!pf.ok) {
+          const cli = {
+            kind: "caller",
+            code: "invalid_request",
+            message: "request body failed client-side schema preflight",
+            fieldErrors: pf.fieldErrors
+          };
+          process.stderr.write(renderError(cli, { color }));
+          process.exit(exitCodeForError(cli));
+        }
+        requestBody = pf.data;
       }
       const auth = await resolveAuth({
         env: process.env,
@@ -16972,7 +17448,7 @@ var validateCommand = defineCommand({
       validateHost(auth.host);
       const client = createHttpClient({ host: auth.host, apiKey: auth.apiKey });
       const { data, error: error51, response } = await client.POST("/api/v1/validate", {
-        body: pf.data
+        body: requestBody
       });
       if (error51 || !data) {
         const bodyText = getErrorBodyText(response) ?? "";
@@ -16993,6 +17469,94 @@ var validateCommand = defineCommand({
       process.stderr.write(renderError(cli, { color }));
       process.exit(exitCodeForError(cli));
     }
+  }
+});
+
+// src/commands/prepare.ts
+import { writeFile } from "node:fs/promises";
+var prepareCommand = defineCommand({
+  meta: {
+    name: "prepare",
+    description: "Reduce a CFD file and assemble an inline ValidationRequest bundle."
+  },
+  args: {
+    input: { type: "positional", required: true, description: "Input CFD file / case dir." },
+    domain: { type: "string", description: "Validation domain (required)." },
+    out: { type: "string", description: 'Output bundle path, or "-" for stdout (default).' },
+    surface: { type: "string", description: "Extract a named boundary surface." },
+    "all-surfaces": { type: "boolean", description: "Extract the outer / all surfaces." },
+    probe: { type: "string", description: 'Probe line start "x,y,z" (requires --probe-to).' },
+    "probe-to": { type: "string", description: 'Probe line end "x,y,z".' },
+    resolution: { type: "string", description: "Probe line resolution (default 100)." },
+    fields: { type: "string", description: "Comma-separated field allowlist." },
+    kind: { type: "string", description: "Evidence kind: table (default) or series." },
+    role: { type: "string", description: "Evidence artifact role (default primary_result)." },
+    roles: { type: "string", description: 'Per-column fluid roles "col=dimension,..." (e.g. u=velocity).' },
+    units: { type: "string", description: 'Claimed units "dimension=unit,..." (e.g. velocity=m/s).' },
+    scenario: { type: "string", description: "context.scenario." },
+    "fluid-id": { type: "string", description: "context.fluid_id." },
+    "evidence-id": { type: "string", description: "Evidence item id (default reduced_extract)." },
+    "body-cap": { type: "string", description: `Target body cap in bytes (default ${DEFAULT_BODY_CAP_BYTES}).` },
+    "allow-uvx": { type: "boolean", description: "Opt in to the pinned uvx reducer fetch (PyPI)." },
+    verbose: { type: "boolean", description: "Print reducer resolution to stderr." }
+  },
+  async run({ args }) {
+    const color = process.stdout.isTTY && !process.env.NO_COLOR;
+    const outcome = await runPrepare(
+      {
+        input: args.input,
+        domain: args.domain,
+        surface: args.surface,
+        allSurfaces: args["all-surfaces"],
+        probe: args.probe,
+        probeTo: args["probe-to"],
+        resolution: args.resolution,
+        fields: args.fields,
+        kind: args.kind,
+        role: args.role,
+        roles: args.roles,
+        units: args.units,
+        scenario: args.scenario,
+        fluidId: args["fluid-id"],
+        evidenceId: args["evidence-id"],
+        bodyCap: args["body-cap"],
+        allowUvx: args["allow-uvx"],
+        verbose: args.verbose
+      },
+      {
+        env: process.env,
+        pathLookup: (cmd) => lookupOnPath(cmd),
+        captureSpawn: defaultCaptureSpawn,
+        onNote: (line) => process.stderr.write(`${line}
+`)
+      }
+    );
+    if (!outcome.ok) {
+      if (outcome.fieldErrors) {
+        const cli = {
+          kind: "caller",
+          code: "invalid_request",
+          message: "assembled bundle failed client-side schema preflight",
+          fieldErrors: outcome.fieldErrors
+        };
+        process.stderr.write(renderError(cli, { color }));
+      } else if (outcome.message) {
+        process.stderr.write(`Error: ${outcome.message}
+`);
+      }
+      process.exit(outcome.exit);
+    }
+    const outText = `${JSON.stringify(outcome.bundle, null, 2)}
+`;
+    const outPath = args.out ?? "-";
+    if (outPath === "-") {
+      process.stdout.write(outText);
+    } else {
+      await writeFile(outPath, outText);
+      process.stderr.write(`wrote ${outPath} (${outcome.bytes} bytes)
+`);
+    }
+    process.exit(0);
   }
 });
 
@@ -17294,7 +17858,7 @@ function preflightArgs(argv, rootInput) {
   const tokens = Array.from(argv, (raw, idx) => ({ raw, idx }));
   const candidatePositionals = [];
   for (const t of tokens) {
-    if (t.raw.startsWith("-") && t.raw !== "-" && t.raw !== "--") {
+    if (isFlagToken(t.raw)) {
       continue;
     }
     candidatePositionals.push(t);
@@ -17416,9 +17980,12 @@ function buildAliasMap(declared) {
   m.set("v", "version");
   return m;
 }
+var NUMERIC_LITERAL_AFTER_DASH = /^-{1,2}[.\d]/;
 function isFlagToken(raw) {
   if (raw === "-" || raw === "--") return false;
-  return raw.startsWith("-");
+  if (!raw.startsWith("-")) return false;
+  if (NUMERIC_LITERAL_AFTER_DASH.test(raw)) return false;
+  return true;
 }
 function parseFlagToken(raw) {
   const eq = raw.indexOf("=");
@@ -17450,8 +18017,8 @@ function hasAnyMetaFlag(seen) {
 // src/cli.ts
 function loadVersion() {
   try {
-    const here = path2.dirname(fileURLToPath(import.meta.url));
-    const pkgPath = path2.resolve(here, "..", "package.json");
+    const here = path3.dirname(fileURLToPath(import.meta.url));
+    const pkgPath = path3.resolve(here, "..", "package.json");
     const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
     return pkg.version ?? "0.0.0";
   } catch {
@@ -17477,6 +18044,8 @@ var main = defineCommand({
   },
   subCommands: {
     validate: validateCommand,
+    extract: extractCommand,
+    prepare: prepareCommand,
     get: getCommand,
     auth: authCommand
   }
