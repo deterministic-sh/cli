@@ -15969,7 +15969,14 @@ var UNCERTAIN_REASONS = [
   // sampling uniformity cannot be safely evaluated because adjacent
   // axis values approach machine epsilon. Surfaced by
   // structural.sampling_and_ordering (#152).
-  "axis_precision_lost"
+  "axis_precision_lost",
+  // A caller-supplied value overrode a registry/template baseline for a
+  // parameter the check template declared trustCappedParameterKeys-capped
+  // (spec 885 D5c). Mirrors the llm_inferred ceiling precedent for
+  // caller-supplied allowables the engine cannot independently verify;
+  // symmetric across would-be pass and would-be fail. Emitted by
+  // execute.ts:capByVerdictCeiling.
+  "caller_supplied_allowable"
 ];
 var UncertainReasonSchema = external_exports.enum(UNCERTAIN_REASONS);
 var NOT_RUN_REASONS = [
@@ -15983,7 +15990,13 @@ var NOT_RUN_REASONS = [
   "fixture_coverage_gap",
   "untrusted_fluid_entry",
   "invalid_parameter",
-  "not_configured"
+  "not_configured",
+  // Handler-level trust gate (spec 885 D7, mirrors untrusted_fluid_entry):
+  // material_entry (or another material-registry-derived parameter) reached
+  // the handler without provenance registry_lookup — the handler must not
+  // trust it. Guards against forged material data smuggled past the
+  // per-template allowedUserOverrides lockdown.
+  "untrusted_material_entry"
 ];
 var NotRunReasonSchema = external_exports.enum(NOT_RUN_REASONS);
 var TIMEOUT_REASONS = [
@@ -16293,7 +16306,13 @@ var EvidenceBundleSchema = external_exports.array(EvidenceItemSchema).min(1).max
 // ../validation-engine/src/context-provenance-paths.ts
 var CONTEXT_VERDICT_PATHS = Object.freeze([
   "context.method",
-  "context.operating_regime"
+  "context.operating_regime",
+  // Material identity is a caller-trust-class input (spec 885 D5) — a
+  // deliberate divergence from context.fluid_id, which stays absent: a
+  // caller/orchestrator that derived the material_id via an LLM must be able
+  // to declare llm_inferred/llm_normalized so the global synthetic ceiling
+  // (executeChecks:synthesizeContextCeiling) can cap the verdict.
+  "context.material_id"
 ]);
 var CONTEXT_DESCRIPTIVE_PATHS = Object.freeze([
   "context.scenario",
@@ -16333,9 +16352,16 @@ function hasControlChar(s) {
   }
   return false;
 }
+var CANONICAL_ID_JSON_SCHEMA_META = {
+  maxLength: 64,
+  pattern: FLUID_ID_REGEX.source
+};
 var FluidIdSchema = external_exports.string().max(MAX_CONTEXT_FIELD_LEN).transform((s) => s.trim()).refine((s) => s.length > 0, { message: "fluid_id must not be empty after trimming" }).refine((s) => s.length <= 64, { message: "fluid_id must be 64 characters or fewer" }).refine((s) => !hasControlChar(s), { message: "fluid_id must not contain control characters" }).transform((s) => s.toLowerCase()).refine((s) => FLUID_ID_REGEX.test(s), {
   message: "fluid_id must be 1\u201364 characters of [a-z0-9_:-] after trimming and lowercasing"
-});
+}).meta(CANONICAL_ID_JSON_SCHEMA_META);
+var MaterialIdSchema = external_exports.string().max(MAX_CONTEXT_FIELD_LEN).transform((s) => s.trim()).refine((s) => s.length > 0, { message: "material_id must not be empty after trimming" }).refine((s) => s.length <= 64, { message: "material_id must be 64 characters or fewer" }).refine((s) => !hasControlChar(s), { message: "material_id must not contain control characters" }).transform((s) => s.toLowerCase()).refine((s) => FLUID_ID_REGEX.test(s), {
+  message: "material_id must be 1\u201364 characters of [a-z0-9_:-] after trimming and lowercasing"
+}).meta(CANONICAL_ID_JSON_SCHEMA_META);
 var CHECK_ID_REGEX = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
 var FORBIDDEN_OVERRIDE_KEY_REGEX = /^(?:__proto__|prototype|constructor)$/;
 function exceedsOverrideStructuralBound(root) {
@@ -16432,6 +16458,11 @@ var ValidationContextSchema = external_exports.object({
   method: external_exports.string().max(MAX_CONTEXT_FIELD_LEN).optional(),
   operating_regime: external_exports.string().max(MAX_CONTEXT_FIELD_LEN).optional(),
   fluid_id: FluidIdSchema.optional(),
+  // Caller-supplied solid-material identity (spec 885 D5) — canonicalized and
+  // resolved against the material registry by
+  // materials/material-registry.ts:resolveMaterialIdFromContext. Consumed by
+  // the thermal (886) and structural rule packs.
+  material_id: MaterialIdSchema.optional(),
   time_basis: external_exports.string().max(MAX_CONTEXT_FIELD_LEN).optional(),
   claimed_units: external_exports.record(external_exports.string().max(MAX_UNIT_LEN), external_exports.string().max(MAX_UNIT_LEN)).default({}).refine((r) => Object.keys(r).length <= MAX_CLAIMED_UNITS_ENTRIES, {
     message: `must not exceed ${MAX_CLAIMED_UNITS_ENTRIES} entries`
