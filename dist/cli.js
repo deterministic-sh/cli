@@ -15999,7 +15999,7 @@ var RECOMMENDATION_ACTIONS = [
 var RecommendationActionSchema = external_exports.enum(RECOMMENDATION_ACTIONS);
 
 // ../validation-engine/src/units.ts
-var FLUID_DIMENSIONS = [
+var PHYSICAL_DIMENSIONS = [
   "density",
   "length",
   "mass",
@@ -16008,9 +16008,137 @@ var FLUID_DIMENSIONS = [
   "temperature",
   "time",
   "velocity",
-  "volumetric_flow_rate"
+  "volumetric_flow_rate",
+  "energy",
+  "force",
+  "heat_flux",
+  "heat_transfer_coefficient",
+  "moment",
+  "power",
+  "strain",
+  "stress"
 ];
-var CANONICAL_FLUID_DIMENSION_UNITS = {
+function buildDimensionRules(entries, poisonKeys = []) {
+  const exact = /* @__PURE__ */ new Map();
+  const fold = /* @__PURE__ */ new Map();
+  for (const entry of entries) {
+    exact.set(entry.key, entry.rule);
+    if (entry.foldSafe) {
+      fold.set(entry.key.toLowerCase(), { rule: entry.rule, originalKey: entry.key });
+    }
+  }
+  return { exact, fold, poison: new Set(poisonKeys) };
+}
+var BTU_IT_JOULES = 1055.05585262;
+var LBF_NEWTONS = 4.4482216152605;
+var IN_METERS = 0.0254;
+var FT_METERS = 0.3048;
+var PSI_PASCALS = 6894.757293168361;
+var RULES = {
+  density: buildDimensionRules([
+    { key: "kg/m3", rule: { factor: 1, normalized_unit: "kg/m^3" }, foldSafe: true },
+    { key: "kg/m^3", rule: { factor: 1, normalized_unit: "kg/m^3" }, foldSafe: true }
+  ]),
+  length: buildDimensionRules([
+    { key: "cm", rule: { factor: 0.01, normalized_unit: "m" }, foldSafe: true },
+    { key: "m", rule: { factor: 1, normalized_unit: "m" }, foldSafe: true },
+    { key: "mm", rule: { factor: 1e-3, normalized_unit: "m" }, foldSafe: true },
+    { key: "in", rule: { factor: IN_METERS, normalized_unit: "m" }, foldSafe: true },
+    { key: "ft", rule: { factor: FT_METERS, normalized_unit: "m" }, foldSafe: true }
+  ]),
+  mass: buildDimensionRules([
+    { key: "g", rule: { factor: 1e-3, normalized_unit: "kg" }, foldSafe: true },
+    { key: "kg", rule: { factor: 1, normalized_unit: "kg" }, foldSafe: true }
+  ]),
+  mass_flow_rate: buildDimensionRules([
+    { key: "g/s", rule: { factor: 1e-3, normalized_unit: "kg/s" }, foldSafe: true },
+    { key: "kg/s", rule: { factor: 1, normalized_unit: "kg/s" }, foldSafe: true }
+  ]),
+  pressure: buildDimensionRules([
+    { key: "kpa", rule: { factor: 1e3, normalized_unit: "Pa" }, foldSafe: true },
+    { key: "pa", rule: { factor: 1, normalized_unit: "Pa" }, foldSafe: true }
+  ]),
+  temperature: buildDimensionRules([
+    { key: "c", rule: { factor: 1, normalized_unit: "K", offset: 273.15 }, foldSafe: true },
+    { key: "k", rule: { factor: 1, normalized_unit: "K" }, foldSafe: true },
+    // D5: offset written as the expression 459.67 * (5 / 9), NOT a decimal
+    // literal — IEEE-754 sign-symmetric multiplication makes the two terms
+    // exact negations at v = -459.67 (absolute zero), landing the result on
+    // EXACTLY 0 K instead of a near-zero double a literal could miss by 1
+    // ulp. See spec D5 for the full derivation.
+    { key: "F", rule: { factor: 5 / 9, normalized_unit: "K", offset: 459.67 * (5 / 9) }, foldSafe: true }
+  ]),
+  time: buildDimensionRules([
+    { key: "ms", rule: { factor: 1e-3, normalized_unit: "s" }, foldSafe: true },
+    { key: "s", rule: { factor: 1, normalized_unit: "s" }, foldSafe: true }
+  ]),
+  velocity: buildDimensionRules([
+    { key: "m/s", rule: { factor: 1, normalized_unit: "m/s" }, foldSafe: true }
+  ]),
+  volumetric_flow_rate: buildDimensionRules([
+    { key: "l/s", rule: { factor: 1e-3, normalized_unit: "m^3/s" }, foldSafe: true },
+    { key: "m3/s", rule: { factor: 1, normalized_unit: "m^3/s" }, foldSafe: true },
+    { key: "m^3/s", rule: { factor: 1, normalized_unit: "m^3/s" }, foldSafe: true }
+  ]),
+  energy: buildDimensionRules(
+    [
+      { key: "J", rule: { factor: 1, normalized_unit: "J" }, foldSafe: true },
+      { key: "kJ", rule: { factor: 1e3, normalized_unit: "J" }, foldSafe: true },
+      // Exact-case-only: folding 'MJ' to 'mj' would collide with the milli
+      // scale (1e-3 vs 1e6 — a 1e9 hazard). 'mj' is explicitly poisoned below.
+      { key: "MJ", rule: { factor: 1e6, normalized_unit: "J" }, foldSafe: false },
+      { key: "Wh", rule: { factor: 3600, normalized_unit: "J" }, foldSafe: true },
+      { key: "kWh", rule: { factor: 36e5, normalized_unit: "J" }, foldSafe: true },
+      { key: "BTU", rule: { factor: BTU_IT_JOULES, normalized_unit: "J" }, foldSafe: true }
+    ],
+    ["mj"]
+  ),
+  force: buildDimensionRules([
+    { key: "N", rule: { factor: 1, normalized_unit: "N" }, foldSafe: true },
+    { key: "kN", rule: { factor: 1e3, normalized_unit: "N" }, foldSafe: true },
+    { key: "lbf", rule: { factor: LBF_NEWTONS, normalized_unit: "N" }, foldSafe: true }
+  ]),
+  heat_flux: buildDimensionRules([
+    { key: "W/m^2", rule: { factor: 1, normalized_unit: "W/m^2" }, foldSafe: true },
+    { key: "kW/m^2", rule: { factor: 1e3, normalized_unit: "W/m^2" }, foldSafe: true }
+  ]),
+  heat_transfer_coefficient: buildDimensionRules([
+    { key: "W/(m^2*K)", rule: { factor: 1, normalized_unit: "W/(m^2*K)" }, foldSafe: true },
+    { key: "W/m^2/K", rule: { factor: 1, normalized_unit: "W/(m^2*K)" }, foldSafe: true }
+  ]),
+  moment: buildDimensionRules([
+    { key: "N*m", rule: { factor: 1, normalized_unit: "N*m" }, foldSafe: true },
+    { key: "lbf*ft", rule: { factor: LBF_NEWTONS * FT_METERS, normalized_unit: "N*m" }, foldSafe: true },
+    { key: "lbf*in", rule: { factor: LBF_NEWTONS * IN_METERS, normalized_unit: "N*m" }, foldSafe: true }
+  ]),
+  power: buildDimensionRules(
+    [
+      { key: "W", rule: { factor: 1, normalized_unit: "W" }, foldSafe: true },
+      { key: "kW", rule: { factor: 1e3, normalized_unit: "W" }, foldSafe: true },
+      // Exact-case-only; 'mw' poisoned (same milli/mega hazard as MJ).
+      { key: "MW", rule: { factor: 1e6, normalized_unit: "W" }, foldSafe: false },
+      { key: "BTU/h", rule: { factor: BTU_IT_JOULES / 3600, normalized_unit: "W" }, foldSafe: true }
+    ],
+    ["mw"]
+  ),
+  strain: buildDimensionRules([
+    { key: "dimensionless", rule: { factor: 1, normalized_unit: "dimensionless" }, foldSafe: true },
+    { key: "1", rule: { factor: 1, normalized_unit: "dimensionless" }, foldSafe: true },
+    { key: "m/m", rule: { factor: 1, normalized_unit: "dimensionless" }, foldSafe: true },
+    { key: "in/in", rule: { factor: 1, normalized_unit: "dimensionless" }, foldSafe: true }
+  ]),
+  stress: buildDimensionRules(
+    [
+      { key: "Pa", rule: { factor: 1, normalized_unit: "Pa" }, foldSafe: true },
+      // Exact-case-only; 'mpa' poisoned (same milli/mega hazard as MJ/MW).
+      { key: "MPa", rule: { factor: 1e6, normalized_unit: "Pa" }, foldSafe: false },
+      { key: "psi", rule: { factor: PSI_PASCALS, normalized_unit: "Pa" }, foldSafe: true },
+      { key: "ksi", rule: { factor: PSI_PASCALS * 1e3, normalized_unit: "Pa" }, foldSafe: true }
+    ],
+    ["mpa"]
+  )
+};
+var CANONICAL_DIMENSION_UNITS = {
   density: "kg/m^3",
   length: "m",
   mass: "kg",
@@ -16019,12 +16147,50 @@ var CANONICAL_FLUID_DIMENSION_UNITS = {
   temperature: "K",
   time: "s",
   velocity: "m/s",
-  volumetric_flow_rate: "m^3/s"
+  volumetric_flow_rate: "m^3/s",
+  energy: "J",
+  force: "N",
+  heat_flux: "W/m^2",
+  heat_transfer_coefficient: "W/(m^2*K)",
+  moment: "N*m",
+  power: "W",
+  strain: "dimensionless",
+  stress: "Pa"
 };
-var CANONICAL_UNIT_TO_DIMENSION = new Map(
-  Object.entries(CANONICAL_FLUID_DIMENSION_UNITS).map(([dimension, unit]) => [unit, dimension])
+function buildCanonicalUnitToDimension(forward, precedence) {
+  const claimants = /* @__PURE__ */ new Map();
+  for (const [dimension, unit] of Object.entries(forward)) {
+    const existing = claimants.get(unit);
+    if (existing === void 0) {
+      claimants.set(unit, [dimension]);
+    } else {
+      existing.push(dimension);
+    }
+  }
+  const result = /* @__PURE__ */ new Map();
+  for (const [unit, dimensions] of claimants) {
+    if (dimensions.length === 1) {
+      result.set(unit, dimensions[0]);
+      continue;
+    }
+    const winner = Object.hasOwn(precedence, unit) ? precedence[unit] : void 0;
+    if (winner === void 0 || !dimensions.includes(winner)) {
+      throw new Error(
+        `unresolved canonical-unit collision for "${unit}": claimed by [${dimensions.join(", ")}] with no precedence entry`
+      );
+    }
+    result.set(unit, winner);
+  }
+  return result;
+}
+var AMBIGUOUS_CANONICAL_UNIT_PRECEDENCE = {
+  Pa: "pressure"
+};
+var CANONICAL_UNIT_TO_DIMENSION = buildCanonicalUnitToDimension(
+  CANONICAL_DIMENSION_UNITS,
+  AMBIGUOUS_CANONICAL_UNIT_PRECEDENCE
 );
-var FLUID_DIMENSION_SET = new Set(FLUID_DIMENSIONS);
+var PHYSICAL_DIMENSION_SET = new Set(PHYSICAL_DIMENSIONS);
 
 // ../validation-engine/src/limits.ts
 var KIB = 1024;
@@ -16070,10 +16236,10 @@ var MAX_AGENT_ID_LEN = 128;
 var AGENT_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
 
 // ../validation-engine/src/evidence.ts
-var FluidDimensionSchema = external_exports.enum(FLUID_DIMENSIONS);
+var PhysicalDimensionSchema = external_exports.enum(PHYSICAL_DIMENSIONS);
 var ColumnSpecSchema = external_exports.strictObject({
   description: external_exports.string().max(MAX_COLUMN_DESCRIPTION_LEN).optional(),
-  role: FluidDimensionSchema.optional(),
+  role: PhysicalDimensionSchema.optional(),
   type: external_exports.string().max(MAX_COLUMN_DESCRIPTION_LEN).optional()
 });
 var ColumnEntrySchema = external_exports.union([
