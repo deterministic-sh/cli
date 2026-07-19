@@ -15976,7 +15976,12 @@ var UNCERTAIN_REASONS = [
   // caller-supplied allowables the engine cannot independently verify;
   // symmetric across would-be pass and would-be fail. Emitted by
   // execute.ts:capByVerdictCeiling.
-  "caller_supplied_allowable"
+  "caller_supplied_allowable",
+  // T2 tri-state band verdict (spec 886 §6): T_limit * (1 - delta) <= T_max <= T_limit.
+  // Neither out_of_expected_range (describes a range violation, not a near-limit
+  // reading) nor tolerance_unconfirmed (describes an unvalidated tolerance, not a
+  // value close to a known material limit) fits this semantics.
+  "near_boundary"
 ];
 var UncertainReasonSchema = external_exports.enum(UNCERTAIN_REASONS);
 var NOT_RUN_REASONS = [
@@ -15996,7 +16001,12 @@ var NOT_RUN_REASONS = [
   // the handler without provenance registry_lookup — the handler must not
   // trust it. Guards against forged material data smuggled past the
   // per-template allowedUserOverrides lockdown.
-  "untrusted_material_entry"
+  "untrusted_material_entry",
+  // T2 registry limit absent and no caller override supplied (spec 886 §6
+  // matrix row 4) — the material registry has no max_service_temperature or
+  // melting_point for the resolved entry, and the caller declared no
+  // temperature_limit_k fallback, so the check cannot form a verdict.
+  "missing_material_property"
 ];
 var NotRunReasonSchema = external_exports.enum(NOT_RUN_REASONS);
 var TIMEOUT_REASONS = [
@@ -16247,6 +16257,10 @@ var MAX_USER_CHECK_OVERRIDE_NODES = 1e4;
 var MAX_CONTEXT_PROVENANCE_LEN = 32;
 var MAX_AGENT_ID_LEN = 128;
 var AGENT_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
+var MAX_THERMAL_BOUNDARIES_LEN = 64;
+var MAX_THERMAL_INTERFACES_LEN = 64;
+var MAX_EXPECTED_RANGES_LEN = 32;
+var MAX_THERMAL_UNIT_LEN = 32;
 
 // ../validation-engine/src/evidence.ts
 var PhysicalDimensionSchema = external_exports.enum(PHYSICAL_DIMENSIONS);
@@ -16312,7 +16326,20 @@ var CONTEXT_VERDICT_PATHS = Object.freeze([
   // caller/orchestrator that derived the material_id via an LLM must be able
   // to declare llm_inferred/llm_normalized so the global synthetic ceiling
   // (executeChecks:synthesizeContextCeiling) can cap the verdict.
-  "context.material_id"
+  "context.material_id",
+  // Direct-consumption rule (spec 886 §5): consistency.bc_completeness (T5)
+  // reads context.thermal_boundaries to check declared boundary conditions
+  // against the evidence table — an llm_inferred/llm_normalized tag must cap
+  // the verdict since the check trusts the declaration as ground truth.
+  "context.thermal_boundaries",
+  // Direct-consumption rule (spec 886 §5): consistency.interface_flux_continuity
+  // (T6) reads context.thermal_interfaces to pair up per-side flux evidence —
+  // same ceiling rationale as thermal_boundaries above.
+  "context.thermal_interfaces",
+  // Direct-consumption rule (spec 886 §5): range.declared_range_bounds (T10)
+  // reads context.expected_ranges to bound role-mapped evidence columns —
+  // same ceiling rationale as thermal_boundaries above.
+  "context.expected_ranges"
 ]);
 var CONTEXT_DESCRIPTIVE_PATHS = Object.freeze([
   "context.scenario",
@@ -16362,6 +16389,99 @@ var FluidIdSchema = external_exports.string().max(MAX_CONTEXT_FIELD_LEN).transfo
 var MaterialIdSchema = external_exports.string().max(MAX_CONTEXT_FIELD_LEN).transform((s) => s.trim()).refine((s) => s.length > 0, { message: "material_id must not be empty after trimming" }).refine((s) => s.length <= 64, { message: "material_id must be 64 characters or fewer" }).refine((s) => !hasControlChar(s), { message: "material_id must not contain control characters" }).transform((s) => s.toLowerCase()).refine((s) => FLUID_ID_REGEX.test(s), {
   message: "material_id must be 1\u201364 characters of [a-z0-9_:-] after trimming and lowercasing"
 }).meta(CANONICAL_ID_JSON_SCHEMA_META);
+var THERMAL_CANONICAL_ID_REGEX = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+var ThermalCanonicalIdSchema = external_exports.string().max(MAX_CONTEXT_FIELD_LEN).transform((s) => s.trim()).transform((s) => s.toLowerCase()).refine((s) => THERMAL_CANONICAL_ID_REGEX.test(s), {
+  message: "id must be 1-64 characters of [a-z0-9] followed by [a-z0-9_-], after trimming and lowercasing"
+});
+var ThermalUnitSchema = external_exports.string().trim().max(MAX_THERMAL_UNIT_LEN);
+var ThermalToleranceSchema = external_exports.number().positive();
+var ThermalBoundaryTemperatureSchema = external_exports.object({
+  bc_type: external_exports.literal("temperature"),
+  boundary_id: ThermalCanonicalIdSchema,
+  value: external_exports.number(),
+  unit: ThermalUnitSchema,
+  tolerance: ThermalToleranceSchema
+}).strict();
+var ThermalBoundaryHeatFluxSchema = external_exports.object({
+  bc_type: external_exports.literal("heat_flux"),
+  boundary_id: ThermalCanonicalIdSchema,
+  value: external_exports.number(),
+  unit: ThermalUnitSchema,
+  tolerance: ThermalToleranceSchema
+}).strict();
+var ThermalBoundaryAdiabaticSchema = external_exports.object({
+  bc_type: external_exports.literal("adiabatic"),
+  boundary_id: ThermalCanonicalIdSchema,
+  tolerance: ThermalToleranceSchema.optional()
+}).strict();
+var ThermalBoundarySchema = external_exports.discriminatedUnion("bc_type", [
+  ThermalBoundaryTemperatureSchema,
+  ThermalBoundaryHeatFluxSchema,
+  ThermalBoundaryAdiabaticSchema
+]);
+var ThermalBoundariesSchema = external_exports.array(ThermalBoundarySchema).max(MAX_THERMAL_BOUNDARIES_LEN).superRefine((entries, ctx) => {
+  const seen = /* @__PURE__ */ new Set();
+  entries.forEach((entry, index) => {
+    if (seen.has(entry.boundary_id)) {
+      ctx.addIssue({
+        code: "custom",
+        path: [index, "boundary_id"],
+        message: `duplicate canonical boundary_id "${entry.boundary_id}"`
+      });
+      return;
+    }
+    seen.add(entry.boundary_id);
+  });
+});
+var ThermalInterfaceSchema = external_exports.object({
+  interface_id: ThermalCanonicalIdSchema,
+  side_a: ThermalCanonicalIdSchema,
+  side_b: ThermalCanonicalIdSchema,
+  // Declared sign convention — required, no engine default (memo §7 T5).
+  // Only one orientation exists in v1; a closed literal rather than an enum
+  // documents that the shape is forward-compatible with future additions.
+  orientation: external_exports.literal("side_a_to_side_b_positive")
+}).strict().refine((entry) => entry.side_a !== entry.side_b, {
+  message: "side_a and side_b must differ after canonicalization",
+  path: ["side_b"]
+});
+var ThermalInterfacesSchema = external_exports.array(ThermalInterfaceSchema).max(MAX_THERMAL_INTERFACES_LEN).superRefine((entries, ctx) => {
+  const seen = /* @__PURE__ */ new Set();
+  entries.forEach((entry, index) => {
+    if (seen.has(entry.interface_id)) {
+      ctx.addIssue({
+        code: "custom",
+        path: [index, "interface_id"],
+        message: `duplicate canonical interface_id "${entry.interface_id}"`
+      });
+      return;
+    }
+    seen.add(entry.interface_id);
+  });
+});
+var ExpectedRangeSchema = external_exports.object({
+  role: external_exports.enum(PHYSICAL_DIMENSIONS),
+  min: external_exports.number(),
+  max: external_exports.number(),
+  unit: ThermalUnitSchema
+}).strict().refine((entry) => entry.min < entry.max, {
+  message: "min must be strictly less than max",
+  path: ["max"]
+});
+var ExpectedRangesSchema = external_exports.array(ExpectedRangeSchema).max(MAX_EXPECTED_RANGES_LEN).superRefine((entries, ctx) => {
+  const seen = /* @__PURE__ */ new Set();
+  entries.forEach((entry, index) => {
+    if (seen.has(entry.role)) {
+      ctx.addIssue({
+        code: "custom",
+        path: [index, "role"],
+        message: `duplicate expected_ranges.role "${entry.role}"`
+      });
+      return;
+    }
+    seen.add(entry.role);
+  });
+});
 var CHECK_ID_REGEX = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
 var FORBIDDEN_OVERRIDE_KEY_REGEX = /^(?:__proto__|prototype|constructor)$/;
 function exceedsOverrideStructuralBound(root) {
@@ -16464,6 +16584,13 @@ var ValidationContextSchema = external_exports.object({
   // the thermal (886) and structural rule packs.
   material_id: MaterialIdSchema.optional(),
   time_basis: external_exports.string().max(MAX_CONTEXT_FIELD_LEN).optional(),
+  // Thermal rule pack context declarations (spec 886 §5). All three are
+  // additive, wire-compat, and independently optional — a request that omits
+  // them parses exactly as before. Direct-consumption verdict paths: see
+  // context-provenance-paths.ts CONTEXT_VERDICT_PATHS.
+  thermal_boundaries: ThermalBoundariesSchema.optional(),
+  thermal_interfaces: ThermalInterfacesSchema.optional(),
+  expected_ranges: ExpectedRangesSchema.optional(),
   claimed_units: external_exports.record(external_exports.string().max(MAX_UNIT_LEN), external_exports.string().max(MAX_UNIT_LEN)).default({}).refine((r) => Object.keys(r).length <= MAX_CLAIMED_UNITS_ENTRIES, {
     message: `must not exceed ${MAX_CLAIMED_UNITS_ENTRIES} entries`
   })
