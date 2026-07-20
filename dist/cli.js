@@ -17245,20 +17245,112 @@ var extractCommand = defineCommand({
 });
 
 // src/input/assemble-bundle.ts
+var NUMERIC_DTYPES = /* @__PURE__ */ new Set([
+  "int8",
+  "int16",
+  "int32",
+  "int64",
+  "uint8",
+  "uint16",
+  "uint32",
+  "uint64",
+  "float32",
+  "float64"
+]);
+var INTEGER_DTYPES = /* @__PURE__ */ new Set([
+  "int8",
+  "int16",
+  "int32",
+  "int64",
+  "uint8",
+  "uint16",
+  "uint32",
+  "uint64"
+]);
+var UNICODE_DTYPE = /^[<>=|]?U\d+$/;
+var RESERVED_COLUMN_NAMES = /* @__PURE__ */ new Set(["__proto__", "prototype", "constructor"]);
 function runtimeType(dtype) {
-  return dtype.startsWith("bool") ? "boolean" : "number";
+  if (NUMERIC_DTYPES.has(dtype)) return "number";
+  if (dtype === "bool") return "boolean";
+  if (UNICODE_DTYPE.test(dtype)) return "string";
+  return null;
 }
 var DEFAULT_VERSION = "0.1";
 var DEFAULT_EVIDENCE_ID = "reduced_extract";
+function hasOwn(value, key) {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+function matchesRuntimeType(value, expectedType, dtype) {
+  if (value === null) return true;
+  if (typeof value !== expectedType) return false;
+  if (expectedType !== "number") return true;
+  if (!Number.isFinite(value)) return false;
+  return !INTEGER_DTYPES.has(dtype) || Number.isSafeInteger(value);
+}
 function validateReducerShape(r) {
   if (!r || typeof r !== "object") return "reducer output is not an object";
+  const hasPointCount = hasOwn(r, "n_points");
+  const hasEntityCount = hasOwn(r, "n_rows");
+  if (hasPointCount === hasEntityCount) {
+    return "reducer output must declare exactly one count: n_points or n_rows";
+  }
+  const declaredCount = hasPointCount ? r.n_points : r.n_rows;
+  if (typeof declaredCount !== "number" || !Number.isSafeInteger(declaredCount) || declaredCount < 0) {
+    return "reducer output count must be a nonnegative integer";
+  }
   if (!Array.isArray(r.columns) || r.columns.length === 0) return "reducer output has no columns";
-  if (!r.rows || typeof r.rows !== "object") return "reducer output has no rows";
+  if (!r.rows || typeof r.rows !== "object" || Array.isArray(r.rows)) {
+    return "reducer output has no rows object";
+  }
+  const declaredNames = /* @__PURE__ */ new Set();
   for (const c of r.columns) {
-    if (!(c.name in r.rows)) return `reducer column "${c.name}" missing from rows`;
+    if (!c || typeof c !== "object" || typeof c.name !== "string" || c.name.length === 0) {
+      return "reducer output has an invalid column name";
+    }
+    if (RESERVED_COLUMN_NAMES.has(c.name)) {
+      return `reducer column name "${c.name}" is reserved`;
+    }
+    if (declaredNames.has(c.name)) {
+      return `reducer output has duplicate column "${c.name}"`;
+    }
+    declaredNames.add(c.name);
+    if (typeof c.dtype !== "string") {
+      return `reducer column "${c.name}" has an invalid dtype`;
+    }
+    const expectedType = runtimeType(c.dtype);
+    if (expectedType === null) {
+      return `reducer column "${c.name}" has unsupported dtype "${c.dtype}"`;
+    }
+    if (!hasOwn(r.rows, c.name)) return `reducer column "${c.name}" missing from rows`;
+    const values = r.rows[c.name];
+    if (!Array.isArray(values)) {
+      return `reducer rows for column "${c.name}" must be an array`;
+    }
+    for (let row = 0; row < values.length; row++) {
+      if (!matchesRuntimeType(values[row], expectedType, c.dtype)) {
+        return `reducer column "${c.name}" has invalid ${expectedType} value at row ${row}`;
+      }
+    }
+  }
+  if (hasEntityCount) {
+    if (!Array.isArray(r.index_columns) || r.index_columns.length === 0) {
+      return "entity reducer output must declare index_columns";
+    }
+    const indexes = /* @__PURE__ */ new Set();
+    for (const name of r.index_columns) {
+      if (typeof name !== "string" || !declaredNames.has(name) || indexes.has(name)) {
+        return "entity reducer output has invalid index_columns";
+      }
+      indexes.add(name);
+    }
+  } else if (hasOwn(r, "index_columns")) {
+    return "point reducer output must not declare index_columns";
   }
   const lengths = r.columns.map((c) => r.rows[c.name]?.length ?? -1);
   if (new Set(lengths).size > 1) return "reducer columns have unequal row counts";
+  if (lengths[0] !== declaredCount) {
+    return `reducer declared count ${declaredCount} does not match row count ${lengths[0]}`;
+  }
   return null;
 }
 function toRowObjects(r) {
@@ -17266,9 +17358,9 @@ function toRowObjects(r) {
   const n = r.rows[names[0]]?.length ?? 0;
   const out = [];
   for (let i = 0; i < n; i++) {
-    const row = {};
+    const row = /* @__PURE__ */ Object.create(null);
     for (const name of names) {
-      row[name] = r.rows[name][i] ?? null;
+      row[name] = r.rows[name][i];
     }
     out.push(row);
   }
@@ -17283,13 +17375,13 @@ function assembleBundle(input) {
     return { ok: false, message: `malformed reducer evidence-json: ${shapeError}` };
   }
   const columnRoles = input.columnRoles ?? {};
-  const schema = {};
+  const schema = /* @__PURE__ */ Object.create(null);
   for (const c of input.reducer.columns) {
     const entry = {
       type: runtimeType(c.dtype),
       description: c.dtype
     };
-    const role = columnRoles[c.name];
+    const role = hasOwn(columnRoles, c.name) ? columnRoles[c.name] : void 0;
     if (role !== void 0) entry.role = role;
     schema[c.name] = entry;
   }
