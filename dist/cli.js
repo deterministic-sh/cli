@@ -16283,10 +16283,52 @@ var MAX_RUN_MANIFEST_SELECTION_VALUE_LEN = 64;
 
 // ../validation-engine/src/evidence.ts
 var PhysicalDimensionSchema = external_exports.enum(PHYSICAL_DIMENSIONS);
+var VALUE_DTYPE_NUMERIC_BOOL_VALUES = [
+  "bool",
+  "int8",
+  "int16",
+  "int32",
+  "int64",
+  "uint8",
+  "uint16",
+  "uint32",
+  "uint64",
+  "float32",
+  "float64"
+];
+var VALUE_DTYPE_NUMERIC_BOOL = new Set(VALUE_DTYPE_NUMERIC_BOOL_VALUES);
+var VALUE_DTYPE_UNICODE_PATTERN = /^[<>=|]U[1-9][0-9]*$/;
+var MAX_VALUE_DTYPE_LEN = 16;
+function valueDtypeFamily(dtype) {
+  if (dtype === "bool") return "boolean";
+  if (VALUE_DTYPE_NUMERIC_BOOL.has(dtype)) return "number";
+  if (VALUE_DTYPE_UNICODE_PATTERN.test(dtype)) return "string";
+  return void 0;
+}
+var ValueDtypeSchema = external_exports.union([
+  external_exports.enum(VALUE_DTYPE_NUMERIC_BOOL_VALUES),
+  external_exports.string().max(MAX_VALUE_DTYPE_LEN).regex(VALUE_DTYPE_UNICODE_PATTERN, {
+    message: 'value_dtype must be one of the closed numeric/bool vocabulary (bool, int8..int64, uint8..uint64, float32, float64) or an anchored fixed-width Unicode spelling (e.g. "<U8")'
+  })
+]);
 var ColumnSpecSchema = external_exports.strictObject({
   description: external_exports.string().max(MAX_COLUMN_DESCRIPTION_LEN).optional(),
   role: PhysicalDimensionSchema.optional(),
-  type: external_exports.string().max(MAX_COLUMN_DESCRIPTION_LEN).optional()
+  type: external_exports.string().max(MAX_COLUMN_DESCRIPTION_LEN).optional(),
+  value_dtype: ValueDtypeSchema.optional()
+}).superRefine((spec, ctx) => {
+  if (spec.type === void 0 || spec.value_dtype === void 0) return;
+  const dtypeFamily = valueDtypeFamily(spec.value_dtype);
+  if (dtypeFamily === void 0) return;
+  const typeFamily = spec.type === "boolean" || spec.type === "number" || spec.type === "string" ? spec.type : void 0;
+  if (typeFamily === void 0) return;
+  if (typeFamily !== dtypeFamily) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["value_dtype"],
+      message: `value_dtype "${spec.value_dtype}" (${dtypeFamily}) is inconsistent with declared type "${spec.type}" (${typeFamily})`
+    });
+  }
 });
 var ColumnEntrySchema = external_exports.union([
   external_exports.string().max(MAX_COLUMN_DESCRIPTION_LEN),
@@ -17528,7 +17570,7 @@ var INTEGER_DTYPES = /* @__PURE__ */ new Set([
   "uint32",
   "uint64"
 ]);
-var UNICODE_DTYPE = /^[<>=|]?U\d+$/;
+var UNICODE_DTYPE = /^[<>=|]U[1-9][0-9]{0,13}$/;
 var RESERVED_COLUMN_NAMES = /* @__PURE__ */ new Set(["__proto__", "prototype", "constructor"]);
 function runtimeType(dtype) {
   if (NUMERIC_DTYPES.has(dtype)) return "number";
@@ -17640,7 +17682,8 @@ function assembleBundle(input) {
   for (const c of input.reducer.columns) {
     const entry = {
       type: runtimeType(c.dtype),
-      description: c.dtype
+      description: c.dtype,
+      value_dtype: c.dtype
     };
     const role = hasOwn(columnRoles, c.name) ? columnRoles[c.name] : void 0;
     if (role !== void 0) entry.role = role;
