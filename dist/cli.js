@@ -17085,7 +17085,7 @@ function preflight(body) {
 }
 
 // src/subprocess/reducer.ts
-var DETERMINISTIC_EXTRACT_VERSION = "0.0.1";
+var DETERMINISTIC_EXTRACT_VERSION = "0.1.0";
 var REDUCER_PACKAGE = "deterministic-extract";
 var ReducerResolutionError = class extends Error {
   kind;
