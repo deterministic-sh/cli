@@ -15917,6 +15917,20 @@ var ARTIFACT_ROLES = [
 var ArtifactRoleSchema = external_exports.enum(ARTIFACT_ROLES);
 var VALIDATION_MODES = ["instant", "flag", "gate"];
 var ValidationModeSchema = external_exports.enum(VALIDATION_MODES);
+var EVIDENCE_PURPOSES = [
+  "temperature_field",
+  "boundary_heat_balance",
+  "interface_flux",
+  "residual_history",
+  "probe_history",
+  "stress_result",
+  "reaction_result",
+  "applied_load",
+  "modal_result",
+  "mesh_refinement_series",
+  "solver_config"
+];
+var EvidencePurposeSchema = external_exports.enum(EVIDENCE_PURPOSES);
 var CHECK_CATEGORIES = [
   "structural",
   "plausibility",
@@ -16280,6 +16294,10 @@ var EvidenceItemBaseSchema = external_exports.object({
   id: external_exports.string().max(MAX_ID_LEN),
   kind: EvidenceKindSchema,
   role: ArtifactRoleSchema,
+  // Caller-declared semantic discriminator (issue #1032). Optional, additive,
+  // closed vocabulary — the engine never infers it. Absent on older clients;
+  // silently stripped by an older engine's Zod parse (documented wire compat).
+  purpose: EvidencePurposeSchema.optional(),
   uri: external_exports.string().max(MAX_URI_LEN).optional(),
   format: external_exports.string().max(MAX_FORMAT_LEN).optional(),
   schema: external_exports.record(external_exports.string().max(MAX_COLUMN_NAME_LEN), ColumnEntrySchema).default({}).refine((r) => Object.keys(r).length <= MAX_SCHEMA_ENTRIES, {
@@ -16315,7 +16333,19 @@ var EvidenceItemSchema = EvidenceItemBaseSchema.superRefine((item, ctx) => {
     }
   }
 });
-var EvidenceBundleSchema = external_exports.array(EvidenceItemSchema).min(1).max(MAX_EVIDENCE_LEN);
+var EvidenceBundleSchema = external_exports.array(EvidenceItemSchema).min(1).max(MAX_EVIDENCE_LEN).superRefine((items, ctx) => {
+  const counts = /* @__PURE__ */ new Map();
+  for (const item of items) {
+    counts.set(item.id, (counts.get(item.id) ?? 0) + 1);
+  }
+  const duplicates = Array.from(counts.entries()).filter(([, count]) => count > 1).map(([id]) => id).sort();
+  if (duplicates.length > 0) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      message: `duplicate evidence id(s): ${duplicates.join(", ")}`
+    });
+  }
+});
 
 // ../validation-engine/src/context-provenance-paths.ts
 var CONTEXT_VERDICT_PATHS = Object.freeze([
@@ -16648,6 +16678,13 @@ var ValidationRequestSchema = external_exports.object({
 });
 
 // ../validation-engine/src/check.ts
+var EvidenceBindingSchema = external_exports.object({
+  requirement_kind: EvidenceKindSchema,
+  requirement_role: ArtifactRoleSchema.optional(),
+  requirement_purpose: EvidencePurposeSchema.optional(),
+  artifact_ids: external_exports.array(external_exports.string()),
+  matched: external_exports.enum(["purpose", "fallback", "unfiltered", "unmatched"])
+});
 var CheckResultBaseSchema = external_exports.object({
   id: external_exports.string(),
   type: external_exports.string(),
@@ -16661,7 +16698,14 @@ var CheckResultBaseSchema = external_exports.object({
   // merge step). Telemetry filters on `status !== 'not_run'` to detect
   // attempted forgery. Defaults to [] at parse time so the public report
   // contract is "always present, default empty".
-  rejected_user_overrides: external_exports.array(external_exports.string()).default([])
+  rejected_user_overrides: external_exports.array(external_exports.string()).default([]),
+  // Additive report audit trail (issue #1032): per evidence requirement,
+  // exactly which artifacts the planner PROVIDED to the handler and which
+  // routing mode selected them. Populated by execute.ts from the plan's
+  // bindings on both result-construction paths (executed + planner-gated).
+  // Always present, default [] — mirrors the rejected_user_overrides
+  // "always present" contract.
+  evidence_bindings: external_exports.array(EvidenceBindingSchema).default([])
 });
 var PassCheckSchema = CheckResultBaseSchema.extend({
   status: external_exports.literal("pass")
@@ -16690,7 +16734,8 @@ var CheckResultSchema = external_exports.discriminatedUnion("status", [
   TimeoutCheckSchema
 ]);
 var HandlerBaseSchema = CheckResultBaseSchema.omit({
-  rejected_user_overrides: true
+  rejected_user_overrides: true,
+  evidence_bindings: true
 });
 var HandlerPassSchema = HandlerBaseSchema.extend({
   status: external_exports.literal("pass")
