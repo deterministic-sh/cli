@@ -16275,6 +16275,11 @@ var MAX_THERMAL_BOUNDARIES_LEN = 64;
 var MAX_THERMAL_INTERFACES_LEN = 64;
 var MAX_EXPECTED_RANGES_LEN = 32;
 var MAX_THERMAL_UNIT_LEN = 32;
+var MAX_RUN_MANIFEST_ARTIFACTS_LEN = 100;
+var MAX_RUN_MANIFEST_RELATIONSHIPS_LEN = 32;
+var MAX_RUN_MANIFEST_RECIPE_LEN = 64;
+var MAX_RUN_MANIFEST_RECIPE_TOKEN_LEN = 128;
+var MAX_RUN_MANIFEST_SELECTION_VALUE_LEN = 64;
 
 // ../validation-engine/src/evidence.ts
 var PhysicalDimensionSchema = external_exports.enum(PHYSICAL_DIMENSIONS);
@@ -16398,6 +16403,194 @@ function isAllowedContextProvenancePath(path4) {
   if (VERDICT_PATH_SET.has(path4)) return true;
   if (DESCRIPTIVE_PATH_SET.has(path4)) return true;
   return isAllowedContextParametersPath(path4);
+}
+
+// ../validation-engine/src/run-manifest.ts
+function manifestString(max) {
+  return external_exports.string().max(max).transform((s) => s.trim());
+}
+function manifestNonEmptyString(max) {
+  return manifestString(max).refine((s) => s.length > 0, {
+    message: "must not be empty after trimming"
+  }).meta({ minLength: 1 });
+}
+var HEX64_LOWERCASE = /^[0-9a-f]{64}$/;
+var RunManifestDigestSchema = external_exports.strictObject({
+  algorithm: external_exports.literal("sha256"),
+  value: manifestString(64).refine((s) => HEX64_LOWERCASE.test(s), {
+    message: "digest.value must be exactly 64 lowercase hex characters"
+  }).meta({ pattern: "^[0-9a-f]{64}$" })
+});
+var RunManifestSolverConfigSchema = external_exports.strictObject({
+  digest: RunManifestDigestSchema.optional(),
+  evidence_id: external_exports.string().max(MAX_ID_LEN).optional()
+}).refine((sc) => sc.digest !== void 0 || sc.evidence_id !== void 0, {
+  message: "solver_config requires at least one of digest or evidence_id"
+}).meta({ minProperties: 1 });
+var RunManifestProvenanceSchema = external_exports.enum(["caller_declared", "copied_from_solver_config"]);
+var RunManifestDeclarationsSchema = external_exports.strictObject({
+  unit_system: manifestNonEmptyString(MAX_CONTEXT_FIELD_LEN).optional(),
+  entity_location: manifestNonEmptyString(MAX_CONTEXT_FIELD_LEN).optional(),
+  coordinate_frame: manifestNonEmptyString(MAX_CONTEXT_FIELD_LEN).optional(),
+  averaging_policy: manifestNonEmptyString(MAX_CONTEXT_FIELD_LEN).optional(),
+  provenance: RunManifestProvenanceSchema
+});
+var RunManifestModeTimeSchema = external_exports.strictObject({
+  index: external_exports.number().int().nonnegative(),
+  value: manifestString(MAX_RUN_MANIFEST_SELECTION_VALUE_LEN)
+});
+var RunManifestSelectionSchema = external_exports.strictObject({
+  subcase: external_exports.number().int().positive().optional(),
+  load_case: manifestString(MAX_CONTEXT_FIELD_LEN).optional(),
+  mode: RunManifestModeTimeSchema.optional(),
+  time: RunManifestModeTimeSchema.optional(),
+  provenance: RunManifestProvenanceSchema
+});
+var RUN_MANIFEST_SOURCE_DTYPES = ["float32", "float64", "int32", "int64"];
+var RunManifestSourceDtypeSchema = external_exports.enum(RUN_MANIFEST_SOURCE_DTYPES);
+var RunManifestReductionSchema = external_exports.strictObject({
+  tool: manifestString(MAX_CONTEXT_FIELD_LEN).optional(),
+  tool_version: manifestString(MAX_CONTEXT_FIELD_LEN).optional(),
+  source_format: manifestString(MAX_FORMAT_LEN).optional(),
+  recipe: external_exports.array(manifestString(MAX_RUN_MANIFEST_RECIPE_TOKEN_LEN)).max(MAX_RUN_MANIFEST_RECIPE_LEN).optional()
+});
+var RUN_MANIFEST_RELATIONSHIP_KINDS = [
+  "derived_from",
+  "paired_with",
+  "refines",
+  "config_for"
+];
+var RunManifestRelationshipSchema = external_exports.strictObject({
+  kind: external_exports.enum(RUN_MANIFEST_RELATIONSHIP_KINDS),
+  target_evidence_id: external_exports.string().max(MAX_ID_LEN)
+});
+var RunManifestArtifactSchema = external_exports.strictObject({
+  evidence_id: external_exports.string().max(MAX_ID_LEN),
+  relationships: external_exports.array(RunManifestRelationshipSchema).max(MAX_RUN_MANIFEST_RELATIONSHIPS_LEN).optional(),
+  source_dtype: RunManifestSourceDtypeSchema.optional(),
+  declarations: RunManifestDeclarationsSchema.optional(),
+  selection: RunManifestSelectionSchema.optional(),
+  reduction: RunManifestReductionSchema.optional()
+}).superRefine((artifact, ctx) => {
+  if (!artifact.relationships) return;
+  const seenEdges = /* @__PURE__ */ new Set();
+  artifact.relationships.forEach((rel, index) => {
+    if (rel.target_evidence_id === artifact.evidence_id) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["relationships", index, "target_evidence_id"],
+        message: "relationship target must differ from the artifact's own evidence_id"
+      });
+    }
+    const edgeKey = `${rel.kind}:${rel.target_evidence_id}`;
+    if (seenEdges.has(edgeKey)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["relationships", index],
+        message: `duplicate relationship edge (kind="${rel.kind}", target_evidence_id="${rel.target_evidence_id}")`
+      });
+    }
+    seenEdges.add(edgeKey);
+  });
+});
+var RunManifestLifecycleSchema = external_exports.strictObject({
+  ensemble_id: manifestString(MAX_CONTEXT_FIELD_LEN).optional(),
+  run_index: external_exports.number().int().nonnegative().optional()
+});
+var RunManifestSchema = external_exports.strictObject({
+  manifest_version: external_exports.literal("1"),
+  // A manifest without a solver identity is noise — required, non-empty
+  // after trim.
+  solver: manifestNonEmptyString(MAX_CONTEXT_FIELD_LEN),
+  solver_version: manifestString(MAX_CONTEXT_FIELD_LEN).optional(),
+  run_id: manifestString(MAX_ID_LEN).optional(),
+  solver_config: RunManifestSolverConfigSchema.optional(),
+  declarations: RunManifestDeclarationsSchema.optional(),
+  selection: RunManifestSelectionSchema.optional(),
+  artifacts: external_exports.array(RunManifestArtifactSchema).min(1).max(MAX_RUN_MANIFEST_ARTIFACTS_LEN),
+  lifecycle: RunManifestLifecycleSchema.optional()
+}).superRefine((manifest, ctx) => {
+  const requiresSolverConfig = (block, path4) => {
+    if (block?.provenance === "copied_from_solver_config" && manifest.solver_config === void 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: [...path4, "provenance"],
+        message: '"copied_from_solver_config" requires the run-level solver_config block to be present'
+      });
+    }
+  };
+  requiresSolverConfig(manifest.declarations, ["declarations"]);
+  requiresSolverConfig(manifest.selection, ["selection"]);
+  manifest.artifacts.forEach((artifact, index) => {
+    requiresSolverConfig(artifact.declarations, ["artifacts", index, "declarations"]);
+    requiresSolverConfig(artifact.selection, ["artifacts", index, "selection"]);
+  });
+});
+function validateRunManifestCrossReferences(manifest, evidence, ctx) {
+  const evidenceById = new Map(evidence.map((item) => [item.id, item]));
+  const manifestArtifactIds = new Set(manifest.artifacts.map((a) => a.evidence_id));
+  const seenArtifactIds = /* @__PURE__ */ new Set();
+  manifest.artifacts.forEach((artifact, index) => {
+    if (seenArtifactIds.has(artifact.evidence_id)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["run_manifest", "artifacts", index, "evidence_id"],
+        message: `duplicate run_manifest artifact evidence_id "${artifact.evidence_id}"`
+      });
+    }
+    seenArtifactIds.add(artifact.evidence_id);
+    const item = evidenceById.get(artifact.evidence_id);
+    if (!item) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["run_manifest", "artifacts", index, "evidence_id"],
+        message: `run_manifest artifact references unknown evidence id "${artifact.evidence_id}"`
+      });
+    } else if (item.purpose === void 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["run_manifest", "artifacts", index, "evidence_id"],
+        message: `evidence item "${artifact.evidence_id}" referenced by run_manifest must declare a purpose`
+      });
+    }
+    artifact.relationships?.forEach((rel, relIndex) => {
+      if (!manifestArtifactIds.has(rel.target_evidence_id)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["run_manifest", "artifacts", index, "relationships", relIndex, "target_evidence_id"],
+          message: `relationship target "${rel.target_evidence_id}" is not a member of run_manifest.artifacts`
+        });
+      }
+    });
+  });
+  const solverConfigEvidenceId = manifest.solver_config?.evidence_id;
+  if (solverConfigEvidenceId !== void 0) {
+    const cfgItem = evidenceById.get(solverConfigEvidenceId);
+    if (!cfgItem) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["run_manifest", "solver_config", "evidence_id"],
+        message: `run_manifest.solver_config references unknown evidence id "${solverConfigEvidenceId}"`
+      });
+    } else if (cfgItem.purpose !== "solver_config") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["run_manifest", "solver_config", "evidence_id"],
+        message: `run_manifest.solver_config evidence item "${solverConfigEvidenceId}" must declare purpose "solver_config"`
+      });
+    } else {
+      const digest = manifest.solver_config?.digest;
+      if (digest !== void 0 && cfgItem.optional_checksum_sha256 !== void 0) {
+        if (digest.value !== cfgItem.optional_checksum_sha256) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["run_manifest", "solver_config", "digest", "value"],
+            message: `solver_config.digest.value does not match evidence item "${solverConfigEvidenceId}"'s optional_checksum_sha256`
+          });
+        }
+      }
+    }
+  }
 }
 
 // ../validation-engine/src/request.ts
@@ -16674,7 +16867,17 @@ var ValidationRequestSchema = external_exports.object({
   // request body. The pattern bounds length 1–128; `.max` is belt-and-suspenders.
   agent_id: external_exports.string().max(MAX_AGENT_ID_LEN).regex(AGENT_ID_PATTERN, {
     message: "agent_id must be 1\u2013128 chars of [A-Za-z0-9_.:-] (no spaces/quotes/control chars)"
-  }).optional()
+  }).optional(),
+  // #1033: the declarative run contract — sibling of `context`, additive
+  // and independently optional (#886/#142 precedent). No request-version
+  // bump; Zod default-strip keeps older engines compatible with a manifest-
+  // bearing request from a newer client, and a manifest-less request
+  // parses byte-identically on any engine version.
+  run_manifest: RunManifestSchema.optional()
+}).superRefine((request, ctx) => {
+  if (request.run_manifest !== void 0) {
+    validateRunManifestCrossReferences(request.run_manifest, request.evidence, ctx);
+  }
 });
 
 // ../validation-engine/src/check.ts
@@ -16830,7 +17033,11 @@ var ValidationReportSchema = external_exports.object({
   coverage: CoverageSchema.default({}),
   summary: SummarySchema,
   recommendation: RecommendationSchema,
-  provenance: ProvenanceBlockSchema.default({})
+  provenance: ProvenanceBlockSchema.default({}),
+  // #1033: echoed verbatim from `request.run_manifest` by `assembleReport` —
+  // pure pass-through, no derivation. Optional/additive; absent on a
+  // manifest-less request's report.
+  run_manifest: RunManifestSchema.optional()
 });
 
 // src/contract/schemas.ts
@@ -17222,6 +17429,9 @@ function buildReducerArgs(args) {
   } else if (args.surface !== void 0) {
     argv.push("--surface", args.surface);
   }
+  if (args.solver !== void 0) argv.push("--solver", args.solver);
+  if (args.solverVersion !== void 0) argv.push("--solver-version", args.solverVersion);
+  if (args.runId !== void 0) argv.push("--run-id", args.runId);
   return { ok: true, argv };
 }
 var extractCommand = defineCommand({
@@ -17238,6 +17448,9 @@ var extractCommand = defineCommand({
     "probe-to": { type: "string", description: 'Probe line end point "x,y,z".' },
     resolution: { type: "string", description: "Probe line resolution (default 100)." },
     fields: { type: "string", description: "Comma-separated field allowlist (default: all)." },
+    solver: { type: "string", description: "Caller-declared solver identity; supplying this emits a run_manifest (#1033)." },
+    "solver-version": { type: "string", description: "Caller-declared solver version (requires --solver)." },
+    "run-id": { type: "string", description: "Caller-declared run/job identity (requires --solver)." },
     "allow-uvx": { type: "boolean", description: "Opt in to fetching the pinned reducer via uvx if not on PATH (supply-chain: fetches from PyPI)." },
     verbose: { type: "boolean", description: "Print reducer resolution (source + pinned version) to stderr." }
   },
@@ -17250,7 +17463,10 @@ var extractCommand = defineCommand({
       probe: args.probe,
       probeTo: args["probe-to"],
       resolution: args.resolution,
-      fields: args.fields
+      fields: args.fields,
+      solver: args.solver,
+      solverVersion: args["solver-version"],
+      runId: args["run-id"]
     });
     if (!built.ok) {
       process.stderr.write(`Error: ${built.message}
@@ -17430,11 +17646,13 @@ function assembleBundle(input) {
     if (role !== void 0) entry.role = role;
     schema[c.name] = entry;
   }
+  const evidenceId = input.evidenceId ?? DEFAULT_EVIDENCE_ID;
   const evidence = [
     {
-      id: input.evidenceId ?? DEFAULT_EVIDENCE_ID,
+      id: evidenceId,
       kind: input.kind ?? "table",
       role: input.role ?? "primary_result",
+      ...input.purpose !== void 0 ? { purpose: input.purpose } : {},
       format: "json",
       schema,
       value: toRowObjects(input.reducer)
@@ -17449,7 +17667,18 @@ function assembleBundle(input) {
     context,
     evidence
   };
+  if (input.reducer.run_manifest !== void 0) {
+    bundle.run_manifest = bindRunManifest(input.reducer.run_manifest, evidenceId);
+  }
   return { ok: true, bundle };
+}
+function bindRunManifest(extractManifest, evidenceId) {
+  const { artifact, ...rest } = extractManifest;
+  const boundArtifact = {
+    ...artifact,
+    evidence_id: evidenceId
+  };
+  return { ...rest, artifacts: [boundArtifact] };
 }
 
 // src/input/prepare-bundle.ts
@@ -17497,7 +17726,10 @@ async function runPrepare(args, deps) {
     probe: args.probe,
     probeTo: args.probeTo,
     resolution: args.resolution,
-    fields: args.fields
+    fields: args.fields,
+    solver: args.solver,
+    solverVersion: args.solverVersion,
+    runId: args.runId
   });
   if (!built.ok) return { ok: false, exit: 2, message: built.message };
   let resolution;
@@ -17534,6 +17766,13 @@ async function runPrepare(args, deps) {
   } catch {
     return { ok: false, exit: 2, message: "reducer did not emit valid evidence-json" };
   }
+  if (reducerJson.run_manifest !== void 0 && args.purpose === void 0) {
+    return {
+      ok: false,
+      exit: 2,
+      message: `a run manifest requires the evidence item to declare --purpose \u2014 one of: ` + EVIDENCE_PURPOSES.join(", ")
+    };
+  }
   const assembled = assembleBundle({
     reducer: reducerJson,
     domain: args.domain,
@@ -17543,7 +17782,8 @@ async function runPrepare(args, deps) {
     claimedUnits: units.map,
     ...args.scenario ? { scenario: args.scenario } : {},
     ...args.fluidId ? { fluidId: args.fluidId } : {},
-    ...args.evidenceId ? { evidenceId: args.evidenceId } : {}
+    ...args.evidenceId ? { evidenceId: args.evidenceId } : {},
+    ...args.purpose ? { purpose: args.purpose } : {}
   });
   if (!assembled.ok) return { ok: false, exit: 2, message: assembled.message };
   const pf = preflight(assembled.bundle);
@@ -17958,6 +18198,10 @@ var prepareCommand = defineCommand({
     "fluid-id": { type: "string", description: "context.fluid_id." },
     "evidence-id": { type: "string", description: "Evidence item id (default reduced_extract)." },
     "body-cap": { type: "string", description: `Target body cap in bytes (default ${DEFAULT_BODY_CAP_BYTES}).` },
+    solver: { type: "string", description: "Caller-declared solver identity; supplying this emits a run_manifest (#1033)." },
+    "solver-version": { type: "string", description: "Caller-declared solver version (requires --solver)." },
+    "run-id": { type: "string", description: "Caller-declared run/job identity (requires --solver)." },
+    purpose: { type: "string", description: "Evidence item purpose (EVIDENCE_PURPOSES vocabulary); required when the reducer output carries a run_manifest." },
     "allow-uvx": { type: "boolean", description: "Opt in to the pinned uvx reducer fetch (PyPI)." },
     verbose: { type: "boolean", description: "Print reducer resolution to stderr." }
   },
@@ -17981,6 +18225,10 @@ var prepareCommand = defineCommand({
         fluidId: args["fluid-id"],
         evidenceId: args["evidence-id"],
         bodyCap: args["body-cap"],
+        solver: args.solver,
+        solverVersion: args["solver-version"],
+        runId: args["run-id"],
+        purpose: args.purpose,
         allowUvx: args["allow-uvx"],
         verbose: args.verbose
       },
