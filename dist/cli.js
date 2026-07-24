@@ -17334,7 +17334,7 @@ function preflight(body) {
 }
 
 // src/subprocess/reducer.ts
-var DETERMINISTIC_EXTRACT_VERSION = "0.1.0";
+var DETERMINISTIC_EXTRACT_VERSION = "0.2.0";
 var REDUCER_PACKAGE = "deterministic-extract";
 var ReducerResolutionError = class extends Error {
   kind;
@@ -17592,6 +17592,9 @@ function matchesRuntimeType(value, expectedType, dtype) {
 }
 function validateReducerShape(r) {
   if (!r || typeof r !== "object") return "reducer output is not an object";
+  if (hasOwn(r, "purpose") && !EvidencePurposeSchema.safeParse(r.purpose).success) {
+    return `reducer output has invalid purpose ${JSON.stringify(r.purpose)}`;
+  }
   const hasPointCount = hasOwn(r, "n_points");
   const hasEntityCount = hasOwn(r, "n_rows");
   if (hasPointCount === hasEntityCount) {
@@ -17689,13 +17692,14 @@ function assembleBundle(input) {
     if (role !== void 0) entry.role = role;
     schema[c.name] = entry;
   }
+  const purpose = hasOwn(input.reducer, "purpose") ? input.reducer.purpose : input.purpose;
   const evidenceId = input.evidenceId ?? DEFAULT_EVIDENCE_ID;
   const evidence = [
     {
       id: evidenceId,
       kind: input.kind ?? "table",
       role: input.role ?? "primary_result",
-      ...input.purpose !== void 0 ? { purpose: input.purpose } : {},
+      ...purpose !== void 0 ? { purpose } : {},
       format: "json",
       schema,
       value: toRowObjects(input.reducer)
@@ -17809,7 +17813,7 @@ async function runPrepare(args, deps) {
   } catch {
     return { ok: false, exit: 2, message: "reducer did not emit valid evidence-json" };
   }
-  if (reducerJson.run_manifest !== void 0 && args.purpose === void 0) {
+  if (reducerJson.run_manifest !== void 0 && args.purpose === void 0 && reducerJson.purpose === void 0) {
     return {
       ok: false,
       exit: 2,
