@@ -15928,7 +15928,10 @@ var EVIDENCE_PURPOSES = [
   "applied_load",
   "modal_result",
   "mesh_refinement_series",
-  "solver_config"
+  "solver_config",
+  // Structural rule pack additions (issue #1050 §5).
+  "displacement_result",
+  "mesh_quality_summary"
 ];
 var EvidencePurposeSchema = external_exports.enum(EVIDENCE_PURPOSES);
 var CHECK_CATEGORIES = [
@@ -16020,7 +16023,13 @@ var NOT_RUN_REASONS = [
   // matrix row 4) — the material registry has no max_service_temperature or
   // melting_point for the resolved entry, and the caller declared no
   // temperature_limit_k fallback, so the check cannot form a verdict.
-  "missing_material_property"
+  "missing_material_property",
+  // Purpose-routed selection ambiguity (issue #1050 §3 R6): the winning
+  // #1032 selection branch (exact-purpose match OR untagged fallback) found
+  // more than one candidate artifact. Single-match is the enforced
+  // contract; the extract-layer subcase/mode selection (plus the #1033
+  // manifest declarations/selection audit trail) is the selection channel.
+  "ambiguous_evidence"
 ];
 var NotRunReasonSchema = external_exports.enum(NOT_RUN_REASONS);
 var TIMEOUT_REASONS = [
@@ -16416,7 +16425,13 @@ var CONTEXT_VERDICT_PATHS = Object.freeze([
   // Direct-consumption rule (spec 886 §5): range.declared_range_bounds (T10)
   // reads context.expected_ranges to bound role-mapped evidence columns —
   // same ceiling rationale as thermal_boundaries above.
-  "context.expected_ranges"
+  "context.expected_ranges",
+  // Direct-consumption rule (spec 1050 §5/§6): temporal.modal_frequency_plausibility
+  // (S6) and consistency.rigid_body_modes (S7) both read context.modal_analysis
+  // as their single shared declaration source (frequency_field,
+  // zero_threshold_relative) — an llm_inferred/llm_normalized tag must cap
+  // the verdict since both checks trust the declaration as ground truth.
+  "context.modal_analysis"
 ]);
 var CONTEXT_DESCRIPTIVE_PATHS = Object.freeze([
   "context.scenario",
@@ -16747,6 +16762,11 @@ var ExpectedRangesSchema = external_exports.array(ExpectedRangeSchema).max(MAX_E
     seen.add(entry.role);
   });
 });
+var ModalAnalysisSchema = external_exports.object({
+  frequency_field: external_exports.string().trim().min(1).max(64),
+  frequency_unit: external_exports.enum(["Hz", "1/s"]),
+  zero_threshold_relative: external_exports.number().gt(0).lt(1)
+}).strict();
 var CHECK_ID_REGEX = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
 var FORBIDDEN_OVERRIDE_KEY_REGEX = /^(?:__proto__|prototype|constructor)$/;
 function exceedsOverrideStructuralBound(root) {
@@ -16856,6 +16876,10 @@ var ValidationContextSchema = external_exports.object({
   thermal_boundaries: ThermalBoundariesSchema.optional(),
   thermal_interfaces: ThermalInterfacesSchema.optional(),
   expected_ranges: ExpectedRangesSchema.optional(),
+  // Structural rule pack context declaration (spec 1050 §5, S6/S7). Additive,
+  // wire-compat, independently optional. Direct-consumption verdict path:
+  // see context-provenance-paths.ts CONTEXT_VERDICT_PATHS.
+  modal_analysis: ModalAnalysisSchema.optional(),
   claimed_units: external_exports.record(external_exports.string().max(MAX_UNIT_LEN), external_exports.string().max(MAX_UNIT_LEN)).default({}).refine((r) => Object.keys(r).length <= MAX_CLAIMED_UNITS_ENTRIES, {
     message: `must not exceed ${MAX_CLAIMED_UNITS_ENTRIES} entries`
   })
