@@ -17389,7 +17389,7 @@ function resolveReducer(deps) {
   }
   throw new ReducerResolutionError(
     "not_found",
-    `reducer "${REDUCER_PACKAGE}" not found. Install it (pip install '${REDUCER_PACKAGE}[vtk]==${DETERMINISTIC_EXTRACT_VERSION}'), set DETERMINISTIC_EXTRACT_BIN=<path>, or opt in to the pinned uvx fetch with --allow-uvx / DETERMINISTIC_EXTRACT_ALLOW_UVX=1.`
+    `reducer "${REDUCER_PACKAGE}" not found. deterministic-extract is not yet publicly distributed (pending EPIC #668). Use an existing installation via DETERMINISTIC_EXTRACT_BIN=<path>, request design-partner access, or see https://deterministic.sh/docs/cli/extract/. The pinned uvx fallback remains opt-in with --allow-uvx / DETERMINISTIC_EXTRACT_ALLOW_UVX=1 and is unavailable until publication.`
   );
 }
 function mapReducerExit(code, signal) {
@@ -17468,25 +17468,173 @@ import { spawn as nodeSpawn } from "node:child_process";
 var defaultSpawn = (command, args) => nodeSpawn(command, [...args], { stdio: "inherit", shell: false });
 var defaultCaptureSpawn = (command, args) => nodeSpawn(command, [...args], { stdio: ["ignore", "pipe", "inherit"], shell: false });
 
+// src/commands/nastran-flags.ts
+var declaration = (description) => ({
+  type: "string",
+  description: `Caller-declared Nastran ${description}; forwarded to the reducer.`
+});
+var nastranFlagDefinitions = {
+  "op2-result": declaration("OP2 result name"),
+  "op2-subcase": declaration("OP2 subcase"),
+  "op2-units": declaration("OP2 units"),
+  "op2-entity-location": declaration("OP2 entity location"),
+  "op2-averaging": declaration("OP2 averaging"),
+  "op2-coordinate-frame": declaration("OP2 coordinate frame"),
+  "op2-mode-index": declaration("OP2 mode index"),
+  "op2-mode-value": declaration("OP2 mode value"),
+  "op2-time-index": declaration("OP2 time index"),
+  "op2-time-value": declaration("OP2 time value"),
+  "f06-result": declaration("F06 result name (including eigenvalues)"),
+  "f06-subcase": declaration("F06 subcase"),
+  "f06-units": declaration("F06 units"),
+  "f06-entity-location": declaration("F06 entity location"),
+  "f06-averaging": declaration("F06 averaging"),
+  "f06-coordinate-frame": declaration("F06 coordinate frame"),
+  "f06-mode-index": declaration("F06 mode index"),
+  "f06-mode-value": declaration("F06 mode value"),
+  "f06-time-index": declaration("F06 time index"),
+  "f06-time-value": declaration("F06 time value")
+};
+function readNastranReducerArgs(parsed) {
+  return {
+    op2Result: parsed["op2-result"],
+    op2Subcase: parsed["op2-subcase"],
+    op2Units: parsed["op2-units"],
+    op2EntityLocation: parsed["op2-entity-location"],
+    op2Averaging: parsed["op2-averaging"],
+    op2CoordinateFrame: parsed["op2-coordinate-frame"],
+    op2ModeIndex: parsed["op2-mode-index"],
+    op2ModeValue: parsed["op2-mode-value"],
+    op2TimeIndex: parsed["op2-time-index"],
+    op2TimeValue: parsed["op2-time-value"],
+    f06Result: parsed["f06-result"],
+    f06Subcase: parsed["f06-subcase"],
+    f06Units: parsed["f06-units"],
+    f06EntityLocation: parsed["f06-entity-location"],
+    f06Averaging: parsed["f06-averaging"],
+    f06CoordinateFrame: parsed["f06-coordinate-frame"],
+    f06ModeIndex: parsed["f06-mode-index"],
+    f06ModeValue: parsed["f06-mode-value"],
+    f06TimeIndex: parsed["f06-time-index"],
+    f06TimeValue: parsed["f06-time-value"]
+  };
+}
+function pickNastranReducerArgs(args) {
+  return {
+    op2Result: args.op2Result,
+    op2Subcase: args.op2Subcase,
+    op2Units: args.op2Units,
+    op2EntityLocation: args.op2EntityLocation,
+    op2Averaging: args.op2Averaging,
+    op2CoordinateFrame: args.op2CoordinateFrame,
+    op2ModeIndex: args.op2ModeIndex,
+    op2ModeValue: args.op2ModeValue,
+    op2TimeIndex: args.op2TimeIndex,
+    op2TimeValue: args.op2TimeValue,
+    f06Result: args.f06Result,
+    f06Subcase: args.f06Subcase,
+    f06Units: args.f06Units,
+    f06EntityLocation: args.f06EntityLocation,
+    f06Averaging: args.f06Averaging,
+    f06CoordinateFrame: args.f06CoordinateFrame,
+    f06ModeIndex: args.f06ModeIndex,
+    f06ModeValue: args.f06ModeValue,
+    f06TimeIndex: args.f06TimeIndex,
+    f06TimeValue: args.f06TimeValue
+  };
+}
+
 // src/commands/extract.ts
+var nastranFields = [
+  "subcase",
+  "units",
+  "entity-location",
+  "averaging",
+  "coordinate-frame"
+];
+var nastranFamilyKeys = {
+  op2: ["op2Result", "op2Subcase", "op2Units", "op2EntityLocation", "op2Averaging", "op2CoordinateFrame", "op2ModeIndex", "op2ModeValue", "op2TimeIndex", "op2TimeValue"],
+  f06: ["f06Result", "f06Subcase", "f06Units", "f06EntityLocation", "f06Averaging", "f06CoordinateFrame", "f06ModeIndex", "f06ModeValue", "f06TimeIndex", "f06TimeValue"]
+};
+var camel = (prefix, name) => `${prefix}${name.replace(/(^|-)([a-z])/g, (_, _dash, letter) => letter.toUpperCase())}`;
+function appendNastranFamily(args, prefix, argv) {
+  const result = args[camel(prefix, "result")];
+  const values = (name) => args[camel(prefix, name)];
+  const supplied = [
+    "result",
+    ...nastranFields,
+    "mode-index",
+    "mode-value",
+    "time-index",
+    "time-value"
+  ].some((name) => values(name) !== void 0);
+  if (result === void 0)
+    return supplied ? `--${prefix}-* flags are only valid with --${prefix}-result` : void 0;
+  const missing = nastranFields.filter((name) => values(name) === void 0);
+  if (missing.length)
+    return `--${prefix}-result requires ${missing.map((name) => `--${prefix}-${name}`).join(", ")}`;
+  const modeIndex = values("mode-index");
+  const modeValue = values("mode-value");
+  const timeIndex = values("time-index");
+  const timeValue = values("time-value");
+  if (modeIndex === void 0 !== (modeValue === void 0))
+    return `--${prefix}-mode-index and --${prefix}-mode-value must be supplied together`;
+  if (timeIndex === void 0 !== (timeValue === void 0))
+    return `--${prefix}-time-index and --${prefix}-time-value must be supplied together`;
+  if (modeIndex !== void 0 && timeIndex !== void 0)
+    return `--${prefix}-mode-* and --${prefix}-time-* are mutually exclusive`;
+  for (const name of [
+    "result",
+    ...nastranFields,
+    ...modeIndex !== void 0 ? ["mode-index", "mode-value"] : [],
+    ...timeIndex !== void 0 ? ["time-index", "time-value"] : []
+  ])
+    argv.push(`--${prefix}-${name}=${values(name)}`);
+}
 function buildReducerArgs(args) {
   if (!args.out) {
     return { ok: false, message: "missing required --out <path>" };
   }
-  const modes = [args.surface !== void 0, args.allSurfaces === true, args.probe !== void 0];
+  const hasNastranFamily = (prefix) => nastranFamilyKeys[prefix].some((key) => args[key] !== void 0);
+  const modes = [
+    args.surface !== void 0,
+    args.allSurfaces === true,
+    args.probe !== void 0,
+    args.op2Result !== void 0,
+    args.f06Result !== void 0
+  ];
   const modeCount = modes.filter(Boolean).length;
-  if (modeCount === 0) {
-    return { ok: false, message: "select one of --surface <name>, --all-surfaces, or --probe <p1> --probe-to <p2>" };
+  if (modeCount === 0 && !hasNastranFamily("op2") && !hasNastranFamily("f06")) {
+    return {
+      ok: false,
+      message: args.noModeMessage ?? "select one of --surface <name>, --all-surfaces, --probe <p1> --probe-to <p2>, --op2-result <name>, or --f06-result <name>"
+    };
   }
   if (modeCount > 1) {
-    return { ok: false, message: "--surface, --all-surfaces, and --probe are mutually exclusive" };
+    return {
+      ok: false,
+      message: "--surface, --all-surfaces, --probe, --op2-result, and --f06-result are mutually exclusive"
+    };
   }
+  const op2Argv = [];
+  const op2Error = appendNastranFamily(args, "op2", op2Argv);
+  if (op2Error) return { ok: false, message: op2Error };
+  const f06Argv = [];
+  const f06Error = appendNastranFamily(args, "f06", f06Argv);
+  if (f06Error) return { ok: false, message: f06Error };
   const argv = [args.input, "--out", args.out];
   if (args.emit === "evidence-json") argv.push("--emit", "evidence-json");
   if (args.fields) argv.push("--fields", args.fields);
-  if (args.probe !== void 0) {
+  if (args.op2Result !== void 0) {
+    argv.push(...op2Argv);
+  } else if (args.f06Result !== void 0) {
+    argv.push(...f06Argv);
+  } else if (args.probe !== void 0) {
     if (!args.probeTo) {
-      return { ok: false, message: "--probe requires --probe-to <p2> (the line endpoint)" };
+      return {
+        ok: false,
+        message: "--probe requires --probe-to <p2> (the line endpoint)"
+      };
     }
     argv.push("--probe", args.probe, args.probeTo);
     if (args.resolution) argv.push("--resolution", args.resolution);
@@ -17503,10 +17651,10 @@ function buildReducerArgs(args) {
 var extractCommand = defineCommand({
   meta: {
     name: "extract",
-    description: "Reduce a CFD output file to a Parquet extract via deterministic-extract (local)."
+    description: "Reduce a simulation output file to a Parquet extract via deterministic-extract (local)."
   },
   args: {
-    input: { type: "positional", required: true, description: "Input CFD file / case dir (VTK/OpenFOAM/EnSight/CGNS/Fluent)." },
+    input: { type: "positional", required: true, description: "Input simulation file / case dir (VTK/OpenFOAM/EnSight/CGNS/Fluent/OP2/F06)." },
     out: { type: "string", description: "Output parquet path (schema sidecar written alongside)." },
     surface: { type: "string", description: "Extract a named boundary surface." },
     "all-surfaces": { type: "boolean", description: "Extract the outer / all surfaces (bare surface mode)." },
@@ -17517,6 +17665,7 @@ var extractCommand = defineCommand({
     solver: { type: "string", description: "Caller-declared solver identity; supplying this emits a run_manifest (#1033)." },
     "solver-version": { type: "string", description: "Caller-declared solver version (requires --solver)." },
     "run-id": { type: "string", description: "Caller-declared run/job identity (requires --solver)." },
+    ...nastranFlagDefinitions,
     "allow-uvx": { type: "boolean", description: "Opt in to fetching the pinned reducer via uvx if not on PATH (supply-chain: fetches from PyPI)." },
     verbose: { type: "boolean", description: "Print reducer resolution (source + pinned version) to stderr." }
   },
@@ -17532,7 +17681,8 @@ var extractCommand = defineCommand({
       fields: args.fields,
       solver: args.solver,
       solverVersion: args["solver-version"],
-      runId: args["run-id"]
+      runId: args["run-id"],
+      ...readNastranReducerArgs(args)
     });
     if (!built.ok) {
       process.stderr.write(`Error: ${built.message}
@@ -17789,6 +17939,7 @@ async function runPrepare(args, deps) {
     bodyCap = parsed;
   }
   const built = buildReducerArgs({
+    ...pickNastranReducerArgs(args),
     input: args.input,
     out: "-",
     emit: "evidence-json",
@@ -17800,7 +17951,8 @@ async function runPrepare(args, deps) {
     fields: args.fields,
     solver: args.solver,
     solverVersion: args.solverVersion,
-    runId: args.runId
+    runId: args.runId,
+    noModeMessage: args.noModeMessage
   });
   if (!built.ok) return { ok: false, exit: 2, message: built.message };
   let resolution;
@@ -18073,7 +18225,7 @@ var validateCommand = defineCommand({
   args: {
     bundle: { type: "string", description: 'Path to a ValidationRequest JSON file, or "-" for stdin.' },
     // #740: one-shot reduce→prepare→validate. Mutually exclusive with --bundle.
-    "from-extract": { type: "string", description: "Reduce a CFD file and validate its inline evidence in one step (see `det prepare`)." },
+    "from-extract": { type: "string", description: "Reduce a surface/probe simulation file and validate inline evidence (native Nastran: use `det prepare`)." },
     surface: { type: "string", description: "[--from-extract] named boundary surface." },
     "all-surfaces": { type: "boolean", description: "[--from-extract] outer / all surfaces." },
     probe: { type: "string", description: '[--from-extract] probe line start "x,y,z" (needs --probe-to).' },
@@ -18130,7 +18282,8 @@ var validateCommand = defineCommand({
             // --from-extract honors the same override surface as --bundle (F1).
             bodyCap: args["body-cap"],
             allowUvx: args["allow-uvx"],
-            verbose: args.verbose
+            verbose: args.verbose,
+            noModeMessage: "select one of --surface <name>, --all-surfaces, or --probe <p1> --probe-to <p2>; native Nastran: det prepare \u2026 | det validate --bundle -"
           },
           {
             env: process.env,
@@ -18249,10 +18402,10 @@ import { writeFile } from "node:fs/promises";
 var prepareCommand = defineCommand({
   meta: {
     name: "prepare",
-    description: "Reduce a CFD file and assemble an inline ValidationRequest bundle."
+    description: "Reduce a simulation file and assemble an inline ValidationRequest bundle."
   },
   args: {
-    input: { type: "positional", required: true, description: "Input CFD file / case dir." },
+    input: { type: "positional", required: true, description: "Input simulation file / case dir." },
     domain: { type: "string", description: "Validation domain (required)." },
     out: { type: "string", description: 'Output bundle path, or "-" for stdout (default).' },
     surface: { type: "string", description: "Extract a named boundary surface." },
@@ -18272,6 +18425,7 @@ var prepareCommand = defineCommand({
     solver: { type: "string", description: "Caller-declared solver identity; supplying this emits a run_manifest (#1033)." },
     "solver-version": { type: "string", description: "Caller-declared solver version (requires --solver)." },
     "run-id": { type: "string", description: "Caller-declared run/job identity (requires --solver)." },
+    ...nastranFlagDefinitions,
     purpose: { type: "string", description: "Evidence item purpose (EVIDENCE_PURPOSES vocabulary); required when the reducer output carries a run_manifest." },
     "allow-uvx": { type: "boolean", description: "Opt in to the pinned uvx reducer fetch (PyPI)." },
     verbose: { type: "boolean", description: "Print reducer resolution to stderr." }
@@ -18301,7 +18455,8 @@ var prepareCommand = defineCommand({
         runId: args["run-id"],
         purpose: args.purpose,
         allowUvx: args["allow-uvx"],
-        verbose: args.verbose
+        verbose: args.verbose,
+        ...readNastranReducerArgs(args)
       },
       {
         env: process.env,
