@@ -17358,7 +17358,7 @@ function preflight(body) {
 }
 
 // src/subprocess/reducer.ts
-var DETERMINISTIC_EXTRACT_VERSION = "0.2.0";
+var DETERMINISTIC_EXTRACT_VERSION = "0.3.0";
 var REDUCER_PACKAGE = "deterministic-extract";
 var ReducerResolutionError = class extends Error {
   kind;
