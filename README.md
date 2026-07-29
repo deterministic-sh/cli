@@ -19,7 +19,7 @@ npm install -g @deterministic-sh/cli
 det --version
 ```
 
-Runtime: Node.js 22.14+. The CLI ships as a single-file ES-module bundle with
+Runtime: Node.js 24.18.0+. The CLI ships as a single-file ES-module bundle with
 zero runtime dependencies, published with npm provenance via Trusted Publishers
 OIDC from this repository. If the version you need is not on npm yet, design
 partners receive preview builds through their onboarding channel.
