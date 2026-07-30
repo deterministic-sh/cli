@@ -16490,8 +16490,16 @@ var RunManifestDeclarationsSchema = external_exports.strictObject({
   entity_location: manifestNonEmptyString(MAX_CONTEXT_FIELD_LEN).optional(),
   coordinate_frame: manifestNonEmptyString(MAX_CONTEXT_FIELD_LEN).optional(),
   averaging_policy: manifestNonEmptyString(MAX_CONTEXT_FIELD_LEN).optional(),
+  // The declaration that gives a DOF (degree-of-freedom) block its meaning —
+  // MAPDL RST/RTH results carry per-node DOF values with no self-describing
+  // semantics; without this the numbers are unitless noise (issue #1136).
+  dof_semantics: manifestNonEmptyString(MAX_CONTEXT_FIELD_LEN).optional(),
   provenance: RunManifestProvenanceSchema
 });
+var RunManifestResultSetSchema = external_exports.union([
+  external_exports.strictObject({ index: external_exports.number().int().nonnegative() }),
+  external_exports.strictObject({ value: manifestString(MAX_RUN_MANIFEST_SELECTION_VALUE_LEN) })
+]);
 var RunManifestModeTimeSchema = external_exports.strictObject({
   index: external_exports.number().int().nonnegative(),
   value: manifestString(MAX_RUN_MANIFEST_SELECTION_VALUE_LEN)
@@ -16501,6 +16509,7 @@ var RunManifestSelectionSchema = external_exports.strictObject({
   load_case: manifestString(MAX_CONTEXT_FIELD_LEN).optional(),
   mode: RunManifestModeTimeSchema.optional(),
   time: RunManifestModeTimeSchema.optional(),
+  result_set: RunManifestResultSetSchema.optional(),
   provenance: RunManifestProvenanceSchema
 });
 var RUN_MANIFEST_SOURCE_DTYPES = ["float32", "float64", "int32", "int64"];
