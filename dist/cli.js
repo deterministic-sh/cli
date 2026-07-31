@@ -17553,6 +17553,46 @@ function pickNastranReducerArgs(args) {
   };
 }
 
+// src/commands/mapdl-flags.ts
+var declaration2 = (description) => ({
+  type: "string",
+  description: `Caller-declared MAPDL ${description}; forwarded to the reducer.`
+});
+var mapdlFlagDefinitions = {
+  "mapdl-result": declaration2("result name"),
+  "mapdl-set-index": declaration2("result-set index (exclusive of --mapdl-set-value)"),
+  "mapdl-set-value": declaration2("result-set value (exclusive of --mapdl-set-index)"),
+  "mapdl-units": declaration2("units"),
+  "mapdl-entity-location": declaration2("entity location"),
+  "mapdl-averaging": declaration2("averaging"),
+  "mapdl-coordinate-frame": declaration2("coordinate frame"),
+  "mapdl-dof-semantics": declaration2("DOF semantics (structural DOFs vs. thermal TEMP)")
+};
+function readMapdlReducerArgs(parsed) {
+  return {
+    mapdlResult: parsed["mapdl-result"],
+    mapdlSetIndex: parsed["mapdl-set-index"],
+    mapdlSetValue: parsed["mapdl-set-value"],
+    mapdlUnits: parsed["mapdl-units"],
+    mapdlEntityLocation: parsed["mapdl-entity-location"],
+    mapdlAveraging: parsed["mapdl-averaging"],
+    mapdlCoordinateFrame: parsed["mapdl-coordinate-frame"],
+    mapdlDofSemantics: parsed["mapdl-dof-semantics"]
+  };
+}
+function pickMapdlReducerArgs(args) {
+  return {
+    mapdlResult: args.mapdlResult,
+    mapdlSetIndex: args.mapdlSetIndex,
+    mapdlSetValue: args.mapdlSetValue,
+    mapdlUnits: args.mapdlUnits,
+    mapdlEntityLocation: args.mapdlEntityLocation,
+    mapdlAveraging: args.mapdlAveraging,
+    mapdlCoordinateFrame: args.mapdlCoordinateFrame,
+    mapdlDofSemantics: args.mapdlDofSemantics
+  };
+}
+
 // src/commands/extract.ts
 var nastranFields = [
   "subcase",
@@ -17600,29 +17640,74 @@ function appendNastranFamily(args, prefix, argv) {
   ])
     argv.push(`--${prefix}-${name}=${values(name)}`);
 }
+var mapdlDeclarations = [
+  "units",
+  "entity-location",
+  "averaging",
+  "coordinate-frame",
+  "dof-semantics"
+];
+var mapdlFamilyKeys = [
+  "mapdlResult",
+  "mapdlSetIndex",
+  "mapdlSetValue",
+  "mapdlUnits",
+  "mapdlEntityLocation",
+  "mapdlAveraging",
+  "mapdlCoordinateFrame",
+  "mapdlDofSemantics"
+];
+function appendMapdlFamily(args, argv) {
+  const result = args.mapdlResult;
+  const values = {
+    units: args.mapdlUnits,
+    "entity-location": args.mapdlEntityLocation,
+    averaging: args.mapdlAveraging,
+    "coordinate-frame": args.mapdlCoordinateFrame,
+    "dof-semantics": args.mapdlDofSemantics
+  };
+  const supplied = mapdlFamilyKeys.some((key) => args[key] !== void 0);
+  if (result === void 0)
+    return supplied ? "--mapdl-* flags are only valid with --mapdl-result" : void 0;
+  const missing = mapdlDeclarations.filter((name) => values[name] === void 0);
+  if (missing.length)
+    return `--mapdl-result requires ${missing.map((name) => `--mapdl-${name}`).join(", ")}`;
+  const hasIndex = args.mapdlSetIndex !== void 0;
+  const hasValue = args.mapdlSetValue !== void 0;
+  if (hasIndex && hasValue)
+    return "--mapdl-set-index and --mapdl-set-value are mutually exclusive";
+  if (!hasIndex && !hasValue)
+    return "--mapdl-result requires one of --mapdl-set-index or --mapdl-set-value";
+  argv.push(`--mapdl-result=${result}`);
+  argv.push(hasIndex ? `--mapdl-set-index=${args.mapdlSetIndex}` : `--mapdl-set-value=${args.mapdlSetValue}`);
+  for (const name of mapdlDeclarations) argv.push(`--mapdl-${name}=${values[name]}`);
+  return void 0;
+}
 function buildReducerArgs(args) {
   if (!args.out) {
     return { ok: false, message: "missing required --out <path>" };
   }
   const hasNastranFamily = (prefix) => nastranFamilyKeys[prefix].some((key) => args[key] !== void 0);
+  const hasMapdlFamily = mapdlFamilyKeys.some((key) => args[key] !== void 0);
   const modes = [
     args.surface !== void 0,
     args.allSurfaces === true,
     args.probe !== void 0,
     args.op2Result !== void 0,
-    args.f06Result !== void 0
+    args.f06Result !== void 0,
+    args.mapdlResult !== void 0
   ];
   const modeCount = modes.filter(Boolean).length;
-  if (modeCount === 0 && !hasNastranFamily("op2") && !hasNastranFamily("f06")) {
+  if (modeCount === 0 && !hasNastranFamily("op2") && !hasNastranFamily("f06") && !hasMapdlFamily) {
     return {
       ok: false,
-      message: args.noModeMessage ?? "select one of --surface <name>, --all-surfaces, --probe <p1> --probe-to <p2>, --op2-result <name>, or --f06-result <name>"
+      message: args.noModeMessage ?? "select one of --surface <name>, --all-surfaces, --probe <p1> --probe-to <p2>, --op2-result <name>, --f06-result <name>, or --mapdl-result <name>"
     };
   }
   if (modeCount > 1) {
     return {
       ok: false,
-      message: "--surface, --all-surfaces, --probe, --op2-result, and --f06-result are mutually exclusive"
+      message: "--surface, --all-surfaces, --probe, --op2-result, --f06-result, and --mapdl-result are mutually exclusive"
     };
   }
   const op2Argv = [];
@@ -17631,6 +17716,9 @@ function buildReducerArgs(args) {
   const f06Argv = [];
   const f06Error = appendNastranFamily(args, "f06", f06Argv);
   if (f06Error) return { ok: false, message: f06Error };
+  const mapdlArgv = [];
+  const mapdlError = appendMapdlFamily(args, mapdlArgv);
+  if (mapdlError) return { ok: false, message: mapdlError };
   const argv = [args.input, "--out", args.out];
   if (args.emit === "evidence-json") argv.push("--emit", "evidence-json");
   if (args.fields) argv.push("--fields", args.fields);
@@ -17638,6 +17726,8 @@ function buildReducerArgs(args) {
     argv.push(...op2Argv);
   } else if (args.f06Result !== void 0) {
     argv.push(...f06Argv);
+  } else if (args.mapdlResult !== void 0) {
+    argv.push(...mapdlArgv);
   } else if (args.probe !== void 0) {
     if (!args.probeTo) {
       return {
@@ -17663,7 +17753,7 @@ var extractCommand = defineCommand({
     description: "Reduce a simulation output file to a Parquet extract via deterministic-extract (local)."
   },
   args: {
-    input: { type: "positional", required: true, description: "Input simulation file / case dir (VTK/OpenFOAM/EnSight/CGNS/Fluent/OP2/F06)." },
+    input: { type: "positional", required: true, description: "Input simulation file / case dir (VTK/OpenFOAM/EnSight/CGNS/Fluent/OP2/F06/RST/RTH)." },
     out: { type: "string", description: "Output parquet path (schema sidecar written alongside)." },
     surface: { type: "string", description: "Extract a named boundary surface." },
     "all-surfaces": { type: "boolean", description: "Extract the outer / all surfaces (bare surface mode)." },
@@ -17675,6 +17765,7 @@ var extractCommand = defineCommand({
     "solver-version": { type: "string", description: "Caller-declared solver version (requires --solver)." },
     "run-id": { type: "string", description: "Caller-declared run/job identity (requires --solver)." },
     ...nastranFlagDefinitions,
+    ...mapdlFlagDefinitions,
     "allow-uvx": { type: "boolean", description: "Opt in to fetching the pinned reducer via uvx if not on PATH (supply-chain: fetches from PyPI)." },
     verbose: { type: "boolean", description: "Print reducer resolution (source + pinned version) to stderr." }
   },
@@ -17691,7 +17782,8 @@ var extractCommand = defineCommand({
       solver: args.solver,
       solverVersion: args["solver-version"],
       runId: args["run-id"],
-      ...readNastranReducerArgs(args)
+      ...readNastranReducerArgs(args),
+      ...readMapdlReducerArgs(args)
     });
     if (!built.ok) {
       process.stderr.write(`Error: ${built.message}
@@ -17949,6 +18041,7 @@ async function runPrepare(args, deps) {
   }
   const built = buildReducerArgs({
     ...pickNastranReducerArgs(args),
+    ...pickMapdlReducerArgs(args),
     input: args.input,
     out: "-",
     emit: "evidence-json",
@@ -18234,7 +18327,7 @@ var validateCommand = defineCommand({
   args: {
     bundle: { type: "string", description: 'Path to a ValidationRequest JSON file, or "-" for stdin.' },
     // #740: one-shot reduce→prepare→validate. Mutually exclusive with --bundle.
-    "from-extract": { type: "string", description: "Reduce a surface/probe simulation file and validate inline evidence (native Nastran: use `det prepare`)." },
+    "from-extract": { type: "string", description: "Reduce a surface/probe simulation file and validate inline evidence (native Nastran/MAPDL: use `det prepare`)." },
     surface: { type: "string", description: "[--from-extract] named boundary surface." },
     "all-surfaces": { type: "boolean", description: "[--from-extract] outer / all surfaces." },
     probe: { type: "string", description: '[--from-extract] probe line start "x,y,z" (needs --probe-to).' },
@@ -18292,7 +18385,7 @@ var validateCommand = defineCommand({
             bodyCap: args["body-cap"],
             allowUvx: args["allow-uvx"],
             verbose: args.verbose,
-            noModeMessage: "select one of --surface <name>, --all-surfaces, or --probe <p1> --probe-to <p2>; native Nastran: det prepare \u2026 | det validate --bundle -"
+            noModeMessage: "select one of --surface <name>, --all-surfaces, or --probe <p1> --probe-to <p2>; native Nastran/MAPDL: det prepare \u2026 | det validate --bundle -"
           },
           {
             env: process.env,
@@ -18435,6 +18528,7 @@ var prepareCommand = defineCommand({
     "solver-version": { type: "string", description: "Caller-declared solver version (requires --solver)." },
     "run-id": { type: "string", description: "Caller-declared run/job identity (requires --solver)." },
     ...nastranFlagDefinitions,
+    ...mapdlFlagDefinitions,
     purpose: { type: "string", description: "Evidence item purpose (EVIDENCE_PURPOSES vocabulary); required when the reducer output carries a run_manifest." },
     "allow-uvx": { type: "boolean", description: "Opt in to the pinned uvx reducer fetch (PyPI)." },
     verbose: { type: "boolean", description: "Print reducer resolution to stderr." }
@@ -18465,7 +18559,8 @@ var prepareCommand = defineCommand({
         purpose: args.purpose,
         allowUvx: args["allow-uvx"],
         verbose: args.verbose,
-        ...readNastranReducerArgs(args)
+        ...readNastranReducerArgs(args),
+        ...readMapdlReducerArgs(args)
       },
       {
         env: process.env,
