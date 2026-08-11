@@ -15931,7 +15931,10 @@ var EVIDENCE_PURPOSES = [
   "solver_config",
   // Structural rule pack additions (issue #1050 §5).
   "displacement_result",
-  "mesh_quality_summary"
+  "mesh_quality_summary",
+  // Buckling check family addition (issue #1176 §2.1) — the shared
+  // mode/load-factor spectrum artifact S11-S13 all consume.
+  "buckling_result"
 ];
 var EvidencePurposeSchema = external_exports.enum(EVIDENCE_PURPOSES);
 var CHECK_CATEGORIES = [
@@ -15998,7 +16001,15 @@ var UNCERTAIN_REASONS = [
   // Neither out_of_expected_range (describes a range violation, not a near-limit
   // reading) nor tolerance_unconfirmed (describes an unvalidated tolerance, not a
   // value close to a known material limit) fits this semantics.
-  "near_boundary"
+  "near_boundary",
+  // S12 `consistency.buckling_spectrum_sanity` near-zero-classification guard
+  // (spec 1176 §2.3, memo §14.4): the dynamic-range ratio between the
+  // spectrum's largest and smallest-nonzero magnitude exceeds
+  // `dynamic_range_guard_bound`, so near-zero classification would be
+  // unreliable (an outlier-inflated scale could hide a genuinely near-zero
+  // load factor, or a legitimately tiny-but-real one could be misclassified).
+  // Fail-closed to uncertain rather than guessing either way.
+  "dynamic_range_guard"
 ];
 var UncertainReasonSchema = external_exports.enum(UNCERTAIN_REASONS);
 var NOT_RUN_REASONS = [
@@ -16431,7 +16442,16 @@ var CONTEXT_VERDICT_PATHS = Object.freeze([
   // as their single shared declaration source (frequency_field,
   // zero_threshold_relative) — an llm_inferred/llm_normalized tag must cap
   // the verdict since both checks trust the declaration as ground truth.
-  "context.modal_analysis"
+  "context.modal_analysis",
+  // Direct-consumption rule (spec 1176 §2.1/§2.6): range.buckling_load_factor
+  // (S11), consistency.buckling_spectrum_sanity (S12), and
+  // consistency.buckling_mode_multiplicity (S13) all read
+  // context.buckling_analysis as their single shared declaration source
+  // (analysis_kind, reference_load_description, load_factor_field,
+  // sign_convention, ordering, zero_threshold_absolute) — an
+  // llm_inferred/llm_normalized tag must cap the verdict since all three
+  // checks trust the declaration as ground truth.
+  "context.buckling_analysis"
 ]);
 var CONTEXT_DESCRIPTIVE_PATHS = Object.freeze([
   "context.scenario",
@@ -16776,6 +16796,14 @@ var ModalAnalysisSchema = external_exports.object({
   frequency_unit: external_exports.enum(["Hz", "1/s"]),
   zero_threshold_relative: external_exports.number().gt(0).lt(1)
 }).strict();
+var BucklingAnalysisSchema = external_exports.object({
+  analysis_kind: external_exports.enum(["linear_eigenvalue"]),
+  reference_load_description: external_exports.string().trim().min(1).max(256),
+  load_factor_field: external_exports.string().trim().min(1).max(64),
+  sign_convention: external_exports.enum(["positive_only", "signed"]),
+  ordering: external_exports.enum(["ascending_abs", "none_declared"]),
+  zero_threshold_absolute: external_exports.number().gt(0).finite().optional()
+}).strict();
 var CHECK_ID_REGEX = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
 var FORBIDDEN_OVERRIDE_KEY_REGEX = /^(?:__proto__|prototype|constructor)$/;
 function exceedsOverrideStructuralBound(root) {
@@ -16889,6 +16917,10 @@ var ValidationContextSchema = external_exports.object({
   // wire-compat, independently optional. Direct-consumption verdict path:
   // see context-provenance-paths.ts CONTEXT_VERDICT_PATHS.
   modal_analysis: ModalAnalysisSchema.optional(),
+  // Buckling check family context declaration (spec 1176 §2.1, S11-S13).
+  // Additive, wire-compat, independently optional. Direct-consumption
+  // verdict path: see context-provenance-paths.ts CONTEXT_VERDICT_PATHS.
+  buckling_analysis: BucklingAnalysisSchema.optional(),
   claimed_units: external_exports.record(external_exports.string().max(MAX_UNIT_LEN), external_exports.string().max(MAX_UNIT_LEN)).default({}).refine((r) => Object.keys(r).length <= MAX_CLAIMED_UNITS_ENTRIES, {
     message: `must not exceed ${MAX_CLAIMED_UNITS_ENTRIES} entries`
   })
