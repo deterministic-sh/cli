@@ -15934,7 +15934,12 @@ var EVIDENCE_PURPOSES = [
   "mesh_quality_summary",
   // Buckling check family addition (issue #1176 §2.1) — the shared
   // mode/load-factor spectrum artifact S11-S13 all consume.
-  "buckling_result"
+  "buckling_result",
+  // Fatigue check family additions (issue #1177 §2.1/§2.2) — rainflow-bin
+  // evidence (S15/S16/S18) and per-entity damage/life/margin evidence
+  // (S15/S20).
+  "cycle_histogram",
+  "fatigue_result"
 ];
 var EvidencePurposeSchema = external_exports.enum(EVIDENCE_PURPOSES);
 var CHECK_CATEGORIES = [
@@ -15962,7 +15967,13 @@ var CLAIM_KINDS = [
   "invariant",
   "comparative",
   "temporal",
-  "consistency"
+  "consistency",
+  // Fatigue check family additions (issue #1177 §1). Dedicated per-claim
+  // kinds so plan.ts:collectResolverIds's kind-level resolver union cannot
+  // widen beyond the intended resolver set (a single template per kind
+  // makes the union degenerate to exactly that template's resolved_by).
+  "fatigue_damage",
+  "fatigue_consistency"
 ];
 var ClaimKindSchema = external_exports.enum(CLAIM_KINDS);
 var PROVENANCE_TAGS = [
@@ -16073,7 +16084,9 @@ var PHYSICAL_DIMENSIONS = [
   "moment",
   "power",
   "strain",
-  "stress"
+  "stress",
+  "cycle_count",
+  "stress_amplitude"
 ];
 function buildDimensionRules(entries, poisonKeys = []) {
   const exact = /* @__PURE__ */ new Map();
@@ -16193,6 +16206,37 @@ var RULES = {
       { key: "ksi", rule: { factor: PSI_PASCALS * 1e3, normalized_unit: "Pa" }, foldSafe: true }
     ],
     ["mpa"]
+  ),
+  // #1177 S17 binding: fatigue rainflow-histogram bin count. Dimensionless
+  // (zero SI vector) — 'cycles'/'count'/'1' are synonyms with an identity
+  // conversion (factor 1); fractional values are legal (weighted rainflow
+  // counts). normalized_unit is 'dimensionless' (not a distinct 'cycles'
+  // canonical string) specifically so `CANONICAL_DIMENSION_UNITS.cycle_count`
+  // reuses `strain`'s already-registered zero-vector literal in
+  // `kernels/dimensions.ts` (parseUnitDimension special-cases the string
+  // 'dimensionless' — see that module's header) rather than requiring a new
+  // literal there. The resulting canonical-unit collision with `strain` is
+  // resolved by the `dimensionless -> strain` precedence entry below (the
+  // `Pa -> pressure` D3 precedent) — legacy strain fallback resolution is
+  // unaffected; cycle_count is always role-declared, never inferred.
+  cycle_count: buildDimensionRules([
+    { key: "cycles", rule: { factor: 1, normalized_unit: "dimensionless" }, foldSafe: true },
+    { key: "count", rule: { factor: 1, normalized_unit: "dimensionless" }, foldSafe: true },
+    { key: "1", rule: { factor: 1, normalized_unit: "dimensionless" }, foldSafe: true }
+  ]),
+  // #1177 S17 binding: fatigue stress amplitude/range (the sn_curve
+  // `convention` declaration disambiguates amplitude-vs-range meaning, not
+  // the unit). Same dimension VECTOR as `stress` (both Pa) but a narrower,
+  // independently-registered unit set (Pa/MPa/ksi only — no psi, per spec
+  // §2.7's table) so the fatigue checks' declaration-coherence gate compares
+  // against exactly the vocabulary the check family accepts.
+  stress_amplitude: buildDimensionRules(
+    [
+      { key: "Pa", rule: { factor: 1, normalized_unit: "Pa" }, foldSafe: true },
+      { key: "MPa", rule: { factor: 1e6, normalized_unit: "Pa" }, foldSafe: false },
+      { key: "ksi", rule: { factor: PSI_PASCALS * 1e3, normalized_unit: "Pa" }, foldSafe: true }
+    ],
+    ["mpa"]
   )
 };
 var CANONICAL_DIMENSION_UNITS = {
@@ -16212,7 +16256,9 @@ var CANONICAL_DIMENSION_UNITS = {
   moment: "N*m",
   power: "W",
   strain: "dimensionless",
-  stress: "Pa"
+  stress: "Pa",
+  cycle_count: "dimensionless",
+  stress_amplitude: "Pa"
 };
 function buildCanonicalUnitToDimension(forward, precedence) {
   const claimants = /* @__PURE__ */ new Map();
@@ -16241,7 +16287,8 @@ function buildCanonicalUnitToDimension(forward, precedence) {
   return result;
 }
 var AMBIGUOUS_CANONICAL_UNIT_PRECEDENCE = {
-  Pa: "pressure"
+  Pa: "pressure",
+  dimensionless: "strain"
 };
 var CANONICAL_UNIT_TO_DIMENSION = buildCanonicalUnitToDimension(
   CANONICAL_DIMENSION_UNITS,
@@ -16451,7 +16498,17 @@ var CONTEXT_VERDICT_PATHS = Object.freeze([
   // sign_convention, ordering, zero_threshold_absolute) — an
   // llm_inferred/llm_normalized tag must cap the verdict since all three
   // checks trust the declaration as ground truth.
-  "context.buckling_analysis"
+  "context.buckling_analysis",
+  // Direct-consumption rule (spec 1177 §2.1): range.miner_damage_vs_limit
+  // (S15), consistency.sn_domain_sanity (S16), consistency.
+  // mean_stress_correction_declared (S18), and range.damage_life_
+  // plausibility (S20) all read context.fatigue_analysis (via the single
+  // shared resolveFatigueAnalysis resolver) as their single shared
+  // declaration source (sn_curve, stress_unit, mean_stress_correction,
+  // amplitudes_precorrected) — an llm_inferred/llm_normalized tag must cap
+  // the verdict since every consuming check trusts the declaration as
+  // ground truth.
+  "context.fatigue_analysis"
 ]);
 var CONTEXT_DESCRIPTIVE_PATHS = Object.freeze([
   "context.scenario",
@@ -16804,6 +16861,50 @@ var BucklingAnalysisSchema = external_exports.object({
   ordering: external_exports.enum(["ascending_abs", "none_declared"]),
   zero_threshold_absolute: external_exports.number().gt(0).finite().optional()
 }).strict();
+var SnKnotSchema = external_exports.object({
+  stress: external_exports.number().finite().gt(0),
+  cycles: external_exports.number().finite().gte(1).lte(1e12)
+}).strict();
+var SN_CURVE_ADJACENT_STRESS_MIN_RELATIVE_GAP = 1e-6;
+var SnCurveSchema = external_exports.object({
+  convention: external_exports.enum(["amplitude", "range"]),
+  r_ratio: external_exports.number().finite().gte(-1).lt(1).optional(),
+  knots: external_exports.array(SnKnotSchema).min(2).max(64),
+  endurance_policy: external_exports.enum(["infinite_life", "finite_cutoff", "none"])
+}).strict().superRefine((curve, ctx) => {
+  for (let i = 0; i < curve.knots.length - 1; i += 1) {
+    const cur = curve.knots[i];
+    const next = curve.knots[i + 1];
+    if (cur === void 0 || next === void 0) continue;
+    if (!(cur.stress > next.stress)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["knots", i + 1, "stress"],
+        message: "sn_curve.knots must be strictly decreasing in stress (declared highest-stress first)"
+      });
+    }
+    if (!(next.cycles > cur.cycles)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["knots", i + 1, "cycles"],
+        message: "sn_curve.knots must be strictly increasing in cycles"
+      });
+    }
+    if (cur.stress / next.stress < 1 + SN_CURVE_ADJACENT_STRESS_MIN_RELATIVE_GAP) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["knots", i + 1, "stress"],
+        message: `adjacent sn_curve.knots stresses must differ by a relative gap of at least ${SN_CURVE_ADJACENT_STRESS_MIN_RELATIVE_GAP}`
+      });
+    }
+  }
+});
+var FatigueAnalysisSchema = external_exports.object({
+  sn_curve: SnCurveSchema.optional(),
+  stress_unit: external_exports.enum(["Pa", "MPa", "ksi"]),
+  mean_stress_correction: external_exports.enum(["goodman", "gerber", "none"]),
+  amplitudes_precorrected: external_exports.boolean().optional()
+}).strict();
 var CHECK_ID_REGEX = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
 var FORBIDDEN_OVERRIDE_KEY_REGEX = /^(?:__proto__|prototype|constructor)$/;
 function exceedsOverrideStructuralBound(root) {
@@ -16921,6 +17022,10 @@ var ValidationContextSchema = external_exports.object({
   // Additive, wire-compat, independently optional. Direct-consumption
   // verdict path: see context-provenance-paths.ts CONTEXT_VERDICT_PATHS.
   buckling_analysis: BucklingAnalysisSchema.optional(),
+  // Fatigue check family context declaration (spec 1177 §2.1, S15/S16/S18/
+  // S20). Additive, wire-compat, independently optional. Direct-consumption
+  // verdict path: see context-provenance-paths.ts CONTEXT_VERDICT_PATHS.
+  fatigue_analysis: FatigueAnalysisSchema.optional(),
   claimed_units: external_exports.record(external_exports.string().max(MAX_UNIT_LEN), external_exports.string().max(MAX_UNIT_LEN)).default({}).refine((r) => Object.keys(r).length <= MAX_CLAIMED_UNITS_ENTRIES, {
     message: `must not exceed ${MAX_CLAIMED_UNITS_ENTRIES} entries`
   })
