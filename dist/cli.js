@@ -745,7 +745,11 @@ async function saveCredentials(credentials, env = process.env) {
   const tmp = path.join(parent, tmpName);
   let fhOpened = false;
   try {
-    const fh = await open(tmp, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 384);
+    const fh = await open(
+      tmp,
+      fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY,
+      384
+    );
     fhOpened = true;
     try {
       await fh.writeFile(
@@ -15908,12 +15912,7 @@ var EVIDENCE_KINDS = [
   "reference"
 ];
 var EvidenceKindSchema = external_exports.enum(EVIDENCE_KINDS);
-var ARTIFACT_ROLES = [
-  "primary_result",
-  "derived_state",
-  "reference",
-  "baseline"
-];
+var ARTIFACT_ROLES = ["primary_result", "derived_state", "reference", "baseline"];
 var ArtifactRoleSchema = external_exports.enum(ARTIFACT_ROLES);
 var VALIDATION_MODES = ["instant", "flag", "gate"];
 var ValidationModeSchema = external_exports.enum(VALIDATION_MODES);
@@ -15952,13 +15951,7 @@ var CHECK_CATEGORIES = [
   "comparative"
 ];
 var CheckCategorySchema = external_exports.enum(CHECK_CATEGORIES);
-var CHECK_STATUSES = [
-  "pass",
-  "fail",
-  "uncertain",
-  "not_run",
-  "timeout"
-];
+var CHECK_STATUSES = ["pass", "fail", "uncertain", "not_run", "timeout"];
 var CheckStatusSchema = external_exports.enum(CHECK_STATUSES);
 var SEVERITIES = ["critical", "high", "medium", "low"];
 var SeveritySchema = external_exports.enum(SEVERITIES);
@@ -16054,16 +16047,9 @@ var NOT_RUN_REASONS = [
   "ambiguous_evidence"
 ];
 var NotRunReasonSchema = external_exports.enum(NOT_RUN_REASONS);
-var TIMEOUT_REASONS = [
-  "handler_budget_exceeded",
-  "dispatcher_guard_exceeded"
-];
+var TIMEOUT_REASONS = ["handler_budget_exceeded", "dispatcher_guard_exceeded"];
 var TimeoutReasonSchema = external_exports.enum(TIMEOUT_REASONS);
-var RECOMMENDATION_ACTIONS = [
-  "accept",
-  "escalate",
-  "reject"
-];
+var RECOMMENDATION_ACTIONS = ["accept", "escalate", "reject"];
 var RecommendationActionSchema = external_exports.enum(RECOMMENDATION_ACTIONS);
 
 // ../validation-engine/src/units.ts
@@ -16136,7 +16122,11 @@ var RULES = {
     // exact negations at v = -459.67 (absolute zero), landing the result on
     // EXACTLY 0 K instead of a near-zero double a literal could miss by 1
     // ulp. See spec D5 for the full derivation.
-    { key: "F", rule: { factor: 5 / 9, normalized_unit: "K", offset: 459.67 * (5 / 9) }, foldSafe: true }
+    {
+      key: "F",
+      rule: { factor: 5 / 9, normalized_unit: "K", offset: 459.67 * (5 / 9) },
+      foldSafe: true
+    }
   ]),
   time: buildDimensionRules([
     { key: "ms", rule: { factor: 1e-3, normalized_unit: "s" }, foldSafe: true },
@@ -16178,8 +16168,16 @@ var RULES = {
   ]),
   moment: buildDimensionRules([
     { key: "N*m", rule: { factor: 1, normalized_unit: "N*m" }, foldSafe: true },
-    { key: "lbf*ft", rule: { factor: LBF_NEWTONS * FT_METERS, normalized_unit: "N*m" }, foldSafe: true },
-    { key: "lbf*in", rule: { factor: LBF_NEWTONS * IN_METERS, normalized_unit: "N*m" }, foldSafe: true }
+    {
+      key: "lbf*ft",
+      rule: { factor: LBF_NEWTONS * FT_METERS, normalized_unit: "N*m" },
+      foldSafe: true
+    },
+    {
+      key: "lbf*in",
+      rule: { factor: LBF_NEWTONS * IN_METERS, normalized_unit: "N*m" },
+      foldSafe: true
+    }
   ]),
   power: buildDimensionRules(
     [
@@ -16187,7 +16185,11 @@ var RULES = {
       { key: "kW", rule: { factor: 1e3, normalized_unit: "W" }, foldSafe: true },
       // Exact-case-only; 'mw' poisoned (same milli/mega hazard as MJ).
       { key: "MW", rule: { factor: 1e6, normalized_unit: "W" }, foldSafe: false },
-      { key: "BTU/h", rule: { factor: BTU_IT_JOULES / 3600, normalized_unit: "W" }, foldSafe: true }
+      {
+        key: "BTU/h",
+        rule: { factor: BTU_IT_JOULES / 3600, normalized_unit: "W" },
+        foldSafe: true
+      }
     ],
     ["mw"]
   ),
@@ -16290,10 +16292,7 @@ var AMBIGUOUS_CANONICAL_UNIT_PRECEDENCE = {
   Pa: "pressure",
   dimensionless: "strain"
 };
-var CANONICAL_UNIT_TO_DIMENSION = buildCanonicalUnitToDimension(
-  CANONICAL_DIMENSION_UNITS,
-  AMBIGUOUS_CANONICAL_UNIT_PRECEDENCE
-);
+var CANONICAL_UNIT_TO_DIMENSION = buildCanonicalUnitToDimension(CANONICAL_DIMENSION_UNITS, AMBIGUOUS_CANONICAL_UNIT_PRECEDENCE);
 var PHYSICAL_DIMENSION_SET = new Set(PHYSICAL_DIMENSIONS);
 
 // ../validation-engine/src/limits.ts
@@ -16525,9 +16524,7 @@ var CONTEXT_OUT_OF_SCOPE_PREFIXES = Object.freeze([
 var CONTEXT_PARAMETERS_PREFIX = "context.parameters.";
 var VERDICT_PATH_SET = new Set(CONTEXT_VERDICT_PATHS);
 var DESCRIPTIVE_PATH_SET = new Set(CONTEXT_DESCRIPTIVE_PATHS);
-var CONTEXT_PARAMETERS_KEY_SET = new Set(
-  CONTEXT_PARAMETERS_VERDICT_KEYS
-);
+var CONTEXT_PARAMETERS_KEY_SET = new Set(CONTEXT_PARAMETERS_VERDICT_KEYS);
 function isAllowedContextParametersPath(path4) {
   if (!path4.startsWith(CONTEXT_PARAMETERS_PREFIX)) return false;
   const key = path4.slice(CONTEXT_PARAMETERS_PREFIX.length);
@@ -16700,7 +16697,14 @@ function validateRunManifestCrossReferences(manifest, evidence, ctx) {
       if (!manifestArtifactIds.has(rel.target_evidence_id)) {
         ctx.addIssue({
           code: "custom",
-          path: ["run_manifest", "artifacts", index, "relationships", relIndex, "target_evidence_id"],
+          path: [
+            "run_manifest",
+            "artifacts",
+            index,
+            "relationships",
+            relIndex,
+            "target_evidence_id"
+          ],
           message: `relationship target "${rel.target_evidence_id}" is not a member of run_manifest.artifacts`
         });
       }
@@ -17739,8 +17743,30 @@ var nastranFields = [
   "coordinate-frame"
 ];
 var nastranFamilyKeys = {
-  op2: ["op2Result", "op2Subcase", "op2Units", "op2EntityLocation", "op2Averaging", "op2CoordinateFrame", "op2ModeIndex", "op2ModeValue", "op2TimeIndex", "op2TimeValue"],
-  f06: ["f06Result", "f06Subcase", "f06Units", "f06EntityLocation", "f06Averaging", "f06CoordinateFrame", "f06ModeIndex", "f06ModeValue", "f06TimeIndex", "f06TimeValue"]
+  op2: [
+    "op2Result",
+    "op2Subcase",
+    "op2Units",
+    "op2EntityLocation",
+    "op2Averaging",
+    "op2CoordinateFrame",
+    "op2ModeIndex",
+    "op2ModeValue",
+    "op2TimeIndex",
+    "op2TimeValue"
+  ],
+  f06: [
+    "f06Result",
+    "f06Subcase",
+    "f06Units",
+    "f06EntityLocation",
+    "f06Averaging",
+    "f06CoordinateFrame",
+    "f06ModeIndex",
+    "f06ModeValue",
+    "f06TimeIndex",
+    "f06TimeValue"
+  ]
 };
 var camel = (prefix, name) => `${prefix}${name.replace(/(^|-)([a-z])/g, (_, _dash, letter) => letter.toUpperCase())}`;
 function appendNastranFamily(args, prefix, argv) {
@@ -17811,12 +17837,13 @@ function appendMapdlFamily(args, argv) {
     return `--mapdl-result requires ${missing.map((name) => `--mapdl-${name}`).join(", ")}`;
   const hasIndex = args.mapdlSetIndex !== void 0;
   const hasValue = args.mapdlSetValue !== void 0;
-  if (hasIndex && hasValue)
-    return "--mapdl-set-index and --mapdl-set-value are mutually exclusive";
+  if (hasIndex && hasValue) return "--mapdl-set-index and --mapdl-set-value are mutually exclusive";
   if (!hasIndex && !hasValue)
     return "--mapdl-result requires one of --mapdl-set-index or --mapdl-set-value";
   argv.push(`--mapdl-result=${result}`);
-  argv.push(hasIndex ? `--mapdl-set-index=${args.mapdlSetIndex}` : `--mapdl-set-value=${args.mapdlSetValue}`);
+  argv.push(
+    hasIndex ? `--mapdl-set-index=${args.mapdlSetIndex}` : `--mapdl-set-value=${args.mapdlSetValue}`
+  );
   for (const name of mapdlDeclarations) argv.push(`--mapdl-${name}=${values[name]}`);
   return void 0;
 }
@@ -17890,21 +17917,43 @@ var extractCommand = defineCommand({
     description: "Reduce a simulation output file to a Parquet extract via deterministic-extract (local)."
   },
   args: {
-    input: { type: "positional", required: true, description: "Input simulation file / case dir (VTK/OpenFOAM/EnSight/CGNS/Fluent/OP2/F06/RST/RTH)." },
+    input: {
+      type: "positional",
+      required: true,
+      description: "Input simulation file / case dir (VTK/OpenFOAM/EnSight/CGNS/Fluent/OP2/F06/RST/RTH)."
+    },
     out: { type: "string", description: "Output parquet path (schema sidecar written alongside)." },
     surface: { type: "string", description: "Extract a named boundary surface." },
-    "all-surfaces": { type: "boolean", description: "Extract the outer / all surfaces (bare surface mode)." },
+    "all-surfaces": {
+      type: "boolean",
+      description: "Extract the outer / all surfaces (bare surface mode)."
+    },
     probe: { type: "string", description: 'Probe line start point "x,y,z" (requires --probe-to).' },
     "probe-to": { type: "string", description: 'Probe line end point "x,y,z".' },
     resolution: { type: "string", description: "Probe line resolution (default 100)." },
     fields: { type: "string", description: "Comma-separated field allowlist (default: all)." },
-    solver: { type: "string", description: "Caller-declared solver identity; supplying this emits a run_manifest (#1033)." },
-    "solver-version": { type: "string", description: "Caller-declared solver version (requires --solver)." },
-    "run-id": { type: "string", description: "Caller-declared run/job identity (requires --solver)." },
+    solver: {
+      type: "string",
+      description: "Caller-declared solver identity; supplying this emits a run_manifest (#1033)."
+    },
+    "solver-version": {
+      type: "string",
+      description: "Caller-declared solver version (requires --solver)."
+    },
+    "run-id": {
+      type: "string",
+      description: "Caller-declared run/job identity (requires --solver)."
+    },
     ...nastranFlagDefinitions,
     ...mapdlFlagDefinitions,
-    "allow-uvx": { type: "boolean", description: "Opt in to fetching the pinned reducer via uvx if not on PATH (supply-chain: fetches from PyPI)." },
-    verbose: { type: "boolean", description: "Print reducer resolution (source + pinned version) to stderr." }
+    "allow-uvx": {
+      type: "boolean",
+      description: "Opt in to fetching the pinned reducer via uvx if not on PATH (supply-chain: fetches from PyPI)."
+    },
+    verbose: {
+      type: "boolean",
+      description: "Print reducer resolution (source + pinned version) to stderr."
+    }
   },
   async run({ args }) {
     const built = buildReducerArgs({
@@ -18205,14 +18254,14 @@ async function runPrepare(args, deps) {
     if (err instanceof ReducerResolutionError) return { ok: false, exit: 2, message: err.message };
     throw err;
   }
-  if (args.verbose) deps.onNote?.(`reducer: source=${resolution.source} command=${resolution.command}`);
+  if (args.verbose)
+    deps.onNote?.(`reducer: source=${resolution.source} command=${resolution.command}`);
   if (resolution.source === "uvx") {
-    deps.onNote?.(`note: fetching + running ${resolution.prefixArgs[0]} via uvx (PyPI fetch; provenance pending #668).`);
+    deps.onNote?.(
+      `note: fetching + running ${resolution.prefixArgs[0]} via uvx (PyPI fetch; provenance pending #668).`
+    );
   }
-  const maxCapture = Math.min(
-    DEFAULT_MAX_CAPTURE_BYTES,
-    Math.max(bodyCap * 8, 16 * 1024 * 1024)
-  );
+  const maxCapture = Math.min(DEFAULT_MAX_CAPTURE_BYTES, Math.max(bodyCap * 8, 16 * 1024 * 1024));
   const run = await runReducerCapture(resolution, built.argv, deps.captureSpawn, maxCapture);
   if (run.exit !== 0) return { ok: false, exit: run.exit };
   if (run.overflow) {
@@ -18285,9 +18334,7 @@ function renderReport(report, opts) {
   const lines = [];
   lines.push(bold2("Validation report", color));
   const rec = report.recommendation;
-  lines.push(
-    `  recommendation: ${statusColor(rec.action, color)} \u2014 ${rec.reason}`
-  );
+  lines.push(`  recommendation: ${statusColor(rec.action, color)} \u2014 ${rec.reason}`);
   if (report.summary) {
     const s = report.summary;
     lines.push(
@@ -18302,7 +18349,9 @@ function renderReport(report, opts) {
     lines.push(bold2("Claims", color));
     for (const claim of report.claims) {
       const c = claim;
-      lines.push(`  - ${c.id ?? "?"} (${c.kind ?? "?"}): ${statusColor(c.status ?? "unknown", color)}`);
+      lines.push(
+        `  - ${c.id ?? "?"} (${c.kind ?? "?"}): ${statusColor(c.status ?? "unknown", color)}`
+      );
       if (c.subject) lines.push(`    ${dim(c.subject, color)}`);
     }
   }
@@ -18331,9 +18380,7 @@ function renderReportResponse(rr, opts) {
   const lines = [];
   lines.push(`${dim("Report", color)}      ${rr.reportId}`);
   lines.push(`${dim("Created", color)}     ${rr.createdAt}`);
-  lines.push(
-    `${dim("Owner", color)}       ${rr.owner.source}:${rr.owner.userId}`
-  );
+  lines.push(`${dim("Owner", color)}       ${rr.owner.source}:${rr.owner.userId}`);
   lines.push(`${dim("Correlation", color)} ${rr.correlationId}`);
   lines.push(`${dim("Domain", color)}      ${rr.domain}`);
   lines.push("");
@@ -18462,22 +18509,43 @@ var validateCommand = defineCommand({
     description: "Submit an evidence bundle for validation."
   },
   args: {
-    bundle: { type: "string", description: 'Path to a ValidationRequest JSON file, or "-" for stdin.' },
+    bundle: {
+      type: "string",
+      description: 'Path to a ValidationRequest JSON file, or "-" for stdin.'
+    },
     // #740: one-shot reduce→prepare→validate. Mutually exclusive with --bundle.
-    "from-extract": { type: "string", description: "Reduce a surface/probe simulation file and validate inline evidence (native Nastran/MAPDL: use `det prepare`)." },
+    "from-extract": {
+      type: "string",
+      description: "Reduce a surface/probe simulation file and validate inline evidence (native Nastran/MAPDL: use `det prepare`)."
+    },
     surface: { type: "string", description: "[--from-extract] named boundary surface." },
     "all-surfaces": { type: "boolean", description: "[--from-extract] outer / all surfaces." },
-    probe: { type: "string", description: '[--from-extract] probe line start "x,y,z" (needs --probe-to).' },
+    probe: {
+      type: "string",
+      description: '[--from-extract] probe line start "x,y,z" (needs --probe-to).'
+    },
     "probe-to": { type: "string", description: '[--from-extract] probe line end "x,y,z".' },
     resolution: { type: "string", description: "[--from-extract] probe line resolution." },
     fields: { type: "string", description: "[--from-extract] comma-separated field allowlist." },
-    kind: { type: "string", description: "[--from-extract] evidence kind: table (default) or series." },
+    kind: {
+      type: "string",
+      description: "[--from-extract] evidence kind: table (default) or series."
+    },
     role: { type: "string", description: "[--from-extract] evidence artifact role." },
-    roles: { type: "string", description: '[--from-extract] per-column fluid roles "col=dimension,...".' },
+    roles: {
+      type: "string",
+      description: '[--from-extract] per-column fluid roles "col=dimension,...".'
+    },
     units: { type: "string", description: '[--from-extract] claimed units "dimension=unit,...".' },
-    "evidence-id": { type: "string", description: "[--from-extract] evidence item id (default reduced_extract)." },
+    "evidence-id": {
+      type: "string",
+      description: "[--from-extract] evidence item id (default reduced_extract)."
+    },
     "body-cap": { type: "string", description: "[--from-extract] target body cap in bytes." },
-    "allow-uvx": { type: "boolean", description: "[--from-extract] opt in to the pinned uvx reducer fetch." },
+    "allow-uvx": {
+      type: "boolean",
+      description: "[--from-extract] opt in to the pinned uvx reducer fetch."
+    },
     domain: { type: "string", description: "Override domain (required with --from-extract)." },
     mode: { type: "string", description: "Override mode (instant|flag|gate)." },
     "result-source": { type: "string", description: "Override result_source." },
@@ -18486,7 +18554,10 @@ var validateCommand = defineCommand({
     "operating-regime": { type: "string", description: "Override context.operating_regime." },
     "fluid-id": { type: "string", description: "Override context.fluid_id." },
     "time-basis": { type: "string", description: "Override context.time_basis." },
-    "agent-id": { type: "string", description: "Caller-supplied agent label correlating this validation to one of your agents." },
+    "agent-id": {
+      type: "string",
+      description: "Caller-supplied agent label correlating this validation to one of your agents."
+    },
     host: { type: "string", description: "API host URL (https://; http:// loopback only)." },
     json: { type: "boolean", description: "Force JSON output." },
     pretty: { type: "boolean", description: "Force pretty output." },
@@ -18589,7 +18660,8 @@ var validateCommand = defineCommand({
         };
         const { merged, applied } = mergeFlags(bundle, flags);
         if (args.verbose && applied.length > 0) {
-          for (const a of applied) process.stderr.write(`override: ${a.path} = ${JSON.stringify(a.value)}
+          for (const a of applied)
+            process.stderr.write(`override: ${a.path} = ${JSON.stringify(a.value)}
 `);
         }
         const pf = preflight(merged);
@@ -18655,18 +18727,39 @@ var prepareCommand = defineCommand({
     fields: { type: "string", description: "Comma-separated field allowlist." },
     kind: { type: "string", description: "Evidence kind: table (default) or series." },
     role: { type: "string", description: "Evidence artifact role (default primary_result)." },
-    roles: { type: "string", description: 'Per-column fluid roles "col=dimension,..." (e.g. u=velocity).' },
-    units: { type: "string", description: 'Claimed units "dimension=unit,..." (e.g. velocity=m/s).' },
+    roles: {
+      type: "string",
+      description: 'Per-column fluid roles "col=dimension,..." (e.g. u=velocity).'
+    },
+    units: {
+      type: "string",
+      description: 'Claimed units "dimension=unit,..." (e.g. velocity=m/s).'
+    },
     scenario: { type: "string", description: "context.scenario." },
     "fluid-id": { type: "string", description: "context.fluid_id." },
     "evidence-id": { type: "string", description: "Evidence item id (default reduced_extract)." },
-    "body-cap": { type: "string", description: `Target body cap in bytes (default ${DEFAULT_BODY_CAP_BYTES}).` },
-    solver: { type: "string", description: "Caller-declared solver identity; supplying this emits a run_manifest (#1033)." },
-    "solver-version": { type: "string", description: "Caller-declared solver version (requires --solver)." },
-    "run-id": { type: "string", description: "Caller-declared run/job identity (requires --solver)." },
+    "body-cap": {
+      type: "string",
+      description: `Target body cap in bytes (default ${DEFAULT_BODY_CAP_BYTES}).`
+    },
+    solver: {
+      type: "string",
+      description: "Caller-declared solver identity; supplying this emits a run_manifest (#1033)."
+    },
+    "solver-version": {
+      type: "string",
+      description: "Caller-declared solver version (requires --solver)."
+    },
+    "run-id": {
+      type: "string",
+      description: "Caller-declared run/job identity (requires --solver)."
+    },
     ...nastranFlagDefinitions,
     ...mapdlFlagDefinitions,
-    purpose: { type: "string", description: "Evidence item purpose (EVIDENCE_PURPOSES vocabulary); required when the reducer output carries a run_manifest." },
+    purpose: {
+      type: "string",
+      description: "Evidence item purpose (EVIDENCE_PURPOSES vocabulary); required when the reducer output carries a run_manifest."
+    },
     "allow-uvx": { type: "boolean", description: "Opt in to the pinned uvx reducer fetch (PyPI)." },
     verbose: { type: "boolean", description: "Print reducer resolution to stderr." }
   },
@@ -19255,8 +19348,10 @@ if (isEntrypoint()) {
 `);
       process.exit(2);
     }
-    process.stderr.write(`det: internal error: ${err instanceof Error ? err.stack ?? err.message : String(err)}
-`);
+    process.stderr.write(
+      `det: internal error: ${err instanceof Error ? err.stack ?? err.message : String(err)}
+`
+    );
     process.exit(64);
   });
 }
