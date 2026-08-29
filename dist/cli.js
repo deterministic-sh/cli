@@ -19088,10 +19088,9 @@ var authLogoutCommand = defineCommand({
 });
 
 // src/commands/auth-whoami.ts
-var SAFE_PREFIX_REGEX = /^(det_(?:live|test)_[A-Za-z0-9]{1,32})_.+$/;
+var SAFE_PREFIX_REGEX = /^det_[A-Za-z0-9]{64}$/;
 function safeKeyId(apiKey) {
-  const m = apiKey.match(SAFE_PREFIX_REGEX);
-  if (m && m[1]) return `${m[1]}_<redacted>`;
+  if (SAFE_PREFIX_REGEX.test(apiKey)) return `${apiKey.slice(0, 6)}\u2026<redacted>`;
   return "<redacted>";
 }
 var authWhoamiCommand = defineCommand({
