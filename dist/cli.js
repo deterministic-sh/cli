@@ -18502,7 +18502,229 @@ function pickRenderer(opts) {
   return process.stdout.isTTY ? "pretty" : "json";
 }
 
+// src/generated/sample-bundle.json
+var sample_bundle_default = {
+  version: "1",
+  domain: "fluid-simulation",
+  mode: "instant",
+  context: {
+    scenario: "fully developed laminar pipe flow",
+    method: "analytical",
+    operating_regime: "incompressible",
+    claimed_units: {
+      velocity: "m/s",
+      pressure: "Pa",
+      length: "m"
+    }
+  },
+  evidence: [
+    {
+      id: "velocity-profile",
+      kind: "table",
+      role: "primary_result",
+      schema: {
+        r_m: {
+          description: "radial position (m)",
+          role: "length",
+          type: "number"
+        },
+        u_ms: {
+          description: "axial velocity (m/s)",
+          role: "velocity",
+          type: "number"
+        },
+        pressure_Pa: {
+          description: "static pressure (Pa)",
+          role: "pressure",
+          type: "number"
+        }
+      },
+      value: [
+        {
+          r_m: 0,
+          u_ms: 2.5,
+          pressure_Pa: 101425
+        },
+        {
+          r_m: 1e-3,
+          u_ms: 2.475,
+          pressure_Pa: 101425
+        },
+        {
+          r_m: 2e-3,
+          u_ms: 2.4,
+          pressure_Pa: 101425
+        },
+        {
+          r_m: 3e-3,
+          u_ms: 2.275,
+          pressure_Pa: 101425
+        },
+        {
+          r_m: 4e-3,
+          u_ms: 2.1,
+          pressure_Pa: 101425
+        },
+        {
+          r_m: 5e-3,
+          u_ms: 1.875,
+          pressure_Pa: 101425
+        },
+        {
+          r_m: 6e-3,
+          u_ms: 1.6,
+          pressure_Pa: 101425
+        },
+        {
+          r_m: 7e-3,
+          u_ms: 1.275,
+          pressure_Pa: 101425
+        },
+        {
+          r_m: 8e-3,
+          u_ms: 0.9,
+          pressure_Pa: 101425
+        },
+        {
+          r_m: 9e-3,
+          u_ms: 0.475,
+          pressure_Pa: 101425
+        },
+        {
+          r_m: 0.01,
+          u_ms: 0,
+          pressure_Pa: 101425
+        }
+      ]
+    },
+    {
+      id: "analytical-reference",
+      kind: "reference",
+      role: "reference",
+      schema: {
+        r_m: {
+          description: "radial position (m)",
+          role: "length",
+          type: "number"
+        },
+        u_ms_analytical: {
+          description: "analytical axial velocity (m/s)",
+          role: "velocity",
+          type: "number"
+        }
+      },
+      value: [
+        {
+          r_m: 0,
+          u_ms_analytical: 2.5
+        },
+        {
+          r_m: 1e-3,
+          u_ms_analytical: 2.475
+        },
+        {
+          r_m: 2e-3,
+          u_ms_analytical: 2.4
+        },
+        {
+          r_m: 3e-3,
+          u_ms_analytical: 2.275
+        },
+        {
+          r_m: 4e-3,
+          u_ms_analytical: 2.1
+        },
+        {
+          r_m: 5e-3,
+          u_ms_analytical: 1.875
+        },
+        {
+          r_m: 6e-3,
+          u_ms_analytical: 1.6
+        },
+        {
+          r_m: 7e-3,
+          u_ms_analytical: 1.275
+        },
+        {
+          r_m: 8e-3,
+          u_ms_analytical: 0.9
+        },
+        {
+          r_m: 9e-3,
+          u_ms_analytical: 0.475
+        },
+        {
+          r_m: 0.01,
+          u_ms_analytical: 0
+        }
+      ]
+    }
+  ],
+  claims: [
+    {
+      id: "structurally-reviewable",
+      kind: "invariant",
+      subject: "Are the outputs structurally valid enough to review?",
+      expectation: "The evidence tables are complete, correctly typed, free of non-finite values, and consistently ordered."
+    },
+    {
+      id: "values-in-regime",
+      kind: "range",
+      subject: "Do the computed velocity and pressure values fall within the expected operating regime?",
+      expectation: "Every reported physical quantity stays within its absolute and regime-specific plausibility bounds for incompressible laminar pipe flow."
+    },
+    {
+      id: "mass-conserved",
+      kind: "consistency",
+      subject: "Is mass conserved across the reported flow field?",
+      expectation: "The mass flux implied by the velocity profile stays constant across the reported cross-sections."
+    },
+    {
+      id: "stable-in-time",
+      kind: "temporal",
+      subject: "Did the run converge to a stable, bounded solution?",
+      expectation: "Residuals and the response trend toward a bounded, smoothly converged state."
+    }
+  ],
+  customer_questions: [
+    "Does the computed velocity profile agree with the closed-form Poiseuille solution?"
+  ]
+};
+
 // src/commands/validate.ts
+var SELECTOR_FLAGS = ["bundle", "from-extract", "sample"];
+var REJECTED_WITH_SAMPLE = [
+  "domain",
+  "mode",
+  "result-source",
+  "scenario",
+  "method",
+  "operating-regime",
+  "fluid-id",
+  "time-basis",
+  "agent-id",
+  "surface",
+  "all-surfaces",
+  "probe",
+  "probe-to",
+  "resolution",
+  "fields",
+  "kind",
+  "role",
+  "roles",
+  "units",
+  "evidence-id",
+  "body-cap",
+  "allow-uvx"
+];
+var SAMPLE_ESCALATE_NOTE = "note: sample case is expected to escalate (uncertain \u2260 fail) \u2014 exit 1 is the expected outcome; see https://deterministic.sh/docs/examples/sample-request.json";
+function isSet(value) {
+  return value !== void 0 && value !== false;
+}
+function formatFlagList(flags) {
+  return `${flags.slice(0, -1).join(", ")} and ${flags.slice(-1).join("")}`;
+}
 var validateCommand = defineCommand({
   meta: {
     name: "validate",
@@ -18517,6 +18739,10 @@ var validateCommand = defineCommand({
     "from-extract": {
       type: "string",
       description: "Reduce a surface/probe simulation file and validate inline evidence (native Nastran/MAPDL: use `det prepare`)."
+    },
+    sample: {
+      type: "boolean",
+      description: "Validate the bundled sample request (no input file, no reducer); expected to escalate (exit 1)."
     },
     surface: { type: "string", description: "[--from-extract] named boundary surface." },
     "all-surfaces": { type: "boolean", description: "[--from-extract] outer / all surfaces." },
@@ -18567,12 +18793,38 @@ var validateCommand = defineCommand({
     const color = process.stdout.isTTY && !process.env.NO_COLOR;
     try {
       const fromExtract = args["from-extract"];
-      if (fromExtract !== void 0 && args.bundle !== void 0) {
-        process.stderr.write("Error: --from-extract and --bundle are mutually exclusive\n");
+      const sample = args.sample === true;
+      const selectors = SELECTOR_FLAGS.filter((flag) => isSet(args[flag])).map(
+        (flag) => `--${flag}`
+      );
+      if (selectors.length > 1) {
+        process.stderr.write(`Error: ${formatFlagList(selectors)} are mutually exclusive
+`);
         process.exit(2);
       }
+      if (sample) {
+        const offending = REJECTED_WITH_SAMPLE.find((flag) => isSet(args[flag]));
+        if (offending !== void 0) {
+          process.stderr.write(`Error: --sample cannot be combined with --${offending}
+`);
+          process.exit(2);
+        }
+      }
       let requestBody;
-      if (fromExtract !== void 0) {
+      if (sample) {
+        const pf = preflight(sample_bundle_default);
+        if (!pf.ok) {
+          const cli = {
+            kind: "caller",
+            code: "invalid_request",
+            message: "bundled sample request failed client-side schema preflight",
+            fieldErrors: pf.fieldErrors
+          };
+          process.stderr.write(renderError(cli, { color }));
+          process.exit(exitCodeForError(cli));
+        }
+        requestBody = pf.data;
+      } else if (fromExtract !== void 0) {
         const outcome = await runPrepare(
           {
             input: fromExtract,
@@ -18695,6 +18947,8 @@ var validateCommand = defineCommand({
       const wrapper = data;
       const rendered = pickRenderer({ json: args.json, pretty: args.pretty }) === "json" ? renderJson(wrapper) : renderValidateSuccess(wrapper, { color });
       process.stdout.write(rendered);
+      if (sample) process.stderr.write(`${SAMPLE_ESCALATE_NOTE}
+`);
       process.exit(exitCodeForReport(wrapper.report));
     } catch (err) {
       if (err instanceof LoadBundleError || err instanceof ResolveAuthError || err instanceof CredentialsErrorThrowable || err instanceof InvalidHostError) {
