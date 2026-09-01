@@ -582,6 +582,7 @@ import { open, lstat, mkdir, rename, unlink } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import * as os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 var CredentialsErrorThrowable = class extends Error {
   constructor(detail) {
     super(`credentials: ${detail.kind} at ${detail.path}`);
@@ -591,6 +592,7 @@ var CredentialsErrorThrowable = class extends Error {
   detail;
 };
 var ENOENT = "ENOENT";
+var EEXIST = "EEXIST";
 function credentialsPath(env = process.env) {
   const base = env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config");
   return path.join(base, "deterministic", "credentials.json");
@@ -776,6 +778,142 @@ async function saveCredentials(credentials, env = process.env) {
     });
   }
 }
+function credentialsLockPath(env = process.env) {
+  return `${credentialsPath(env)}.lock`;
+}
+async function readLockDiagnostics(lockPath) {
+  try {
+    const fh = await open(lockPath, "r");
+    let raw;
+    try {
+      raw = await fh.readFile("utf8");
+    } finally {
+      await fh.close();
+    }
+    const parsed = JSON.parse(raw);
+    const holderPid = typeof parsed.pid === "number" && Number.isSafeInteger(parsed.pid) ? parsed.pid : null;
+    const stamped = typeof parsed.acquiredAt === "string" ? Date.parse(parsed.acquiredAt) : Number.NaN;
+    return { ageMs: Number.isFinite(stamped) ? Date.now() - stamped : null, holderPid };
+  } catch {
+    return { ageMs: null, holderPid: null };
+  }
+}
+var LOCK_RETRY_ATTEMPTS = 10;
+var LOCK_RETRY_DELAY_MS = 500;
+async function withCredentialsLock(env, fn, opts = {}) {
+  const attempt = await acquireAndRun(env, fn, opts, true);
+  if (attempt.acquired) return attempt.value;
+  throw new CredentialsErrorThrowable({
+    kind: "io_failed",
+    path: path.dirname(credentialsLockPath(env)),
+    cause: new Error("credentials lock: parent directory vanished during provisioning")
+  });
+}
+async function withCredentialsLockNoProvision(env, fn, opts = {}) {
+  return await acquireAndRun(env, fn, opts, false);
+}
+async function acquireAndRun(env, fn, opts, provisionParent) {
+  const lockPath = credentialsLockPath(env);
+  const parent = path.dirname(lockPath);
+  let parentStatus = await statParent(parent);
+  if (parentStatus.state === "absent" && provisionParent) {
+    try {
+      await mkdir(parent, { recursive: true, mode: 448 });
+    } catch (err) {
+      throw new CredentialsErrorThrowable({
+        kind: "io_failed",
+        path: parent,
+        cause: err
+      });
+    }
+    parentStatus = await statParent(parent);
+  }
+  if (parentStatus.state !== "ok" && parentStatus.state !== "absent") refuseParent(parentStatus);
+  const acquisition = await acquireLockFile(lockPath, opts, provisionParent);
+  if (acquisition === PARENT_ABSENT) return { acquired: false };
+  const fh = acquisition;
+  let contentFailure;
+  try {
+    await fh.writeFile(
+      JSON.stringify({ pid: process.pid, acquiredAt: (/* @__PURE__ */ new Date()).toISOString() }),
+      "utf8"
+    );
+  } catch (err) {
+    contentFailure = err;
+  }
+  try {
+    await fh.close();
+  } catch (err) {
+    contentFailure ??= err;
+  }
+  if (contentFailure !== void 0) {
+    await unlinkQuietly(lockPath);
+    throw new CredentialsErrorThrowable({
+      kind: "io_failed",
+      path: lockPath,
+      cause: contentFailure
+    });
+  }
+  let result;
+  try {
+    result = await fn();
+  } catch (err) {
+    await unlinkQuietly(lockPath);
+    throw err;
+  }
+  try {
+    await unlink(lockPath);
+  } catch (err) {
+    if (err.code !== ENOENT) {
+      throw new CredentialsErrorThrowable({
+        kind: "lock_release_failed",
+        path: lockPath,
+        cause: err
+      });
+    }
+  }
+  return { acquired: true, value: result };
+}
+var PARENT_ABSENT = /* @__PURE__ */ Symbol("credentials-lock:parent-absent");
+async function acquireLockFile(lockPath, opts, provisionParent) {
+  const retries = opts.contention === "retry" ? LOCK_RETRY_ATTEMPTS : 0;
+  const sleep = opts.sleep ?? ((ms) => delay(ms));
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await open(
+        lockPath,
+        fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY,
+        384
+      );
+    } catch (err) {
+      const errno = err.code;
+      if (errno === ENOENT && !provisionParent) return PARENT_ABSENT;
+      if (errno !== EEXIST) {
+        throw new CredentialsErrorThrowable({
+          kind: "io_failed",
+          path: lockPath,
+          cause: err
+        });
+      }
+      if (attempt >= retries) {
+        const { ageMs, holderPid } = await readLockDiagnostics(lockPath);
+        throw new CredentialsErrorThrowable({
+          kind: "lock_contended",
+          path: lockPath,
+          ageMs,
+          holderPid
+        });
+      }
+      await sleep(LOCK_RETRY_DELAY_MS);
+    }
+  }
+}
+async function unlinkQuietly(target) {
+  try {
+    await unlink(target);
+  } catch {
+  }
+}
 async function deleteCredentials(env = process.env) {
   const target = credentialsPath(env);
   const parent = path.dirname(target);
@@ -899,7 +1037,7 @@ function createClient(clientOptions) {
   async function coreFetch(schemaPath, fetchOptions) {
     const {
       baseUrl: localBaseUrl,
-      fetch = baseFetch,
+      fetch: fetch2 = baseFetch,
       Request = CustomRequest,
       headers,
       params = {},
@@ -966,7 +1104,7 @@ function createClient(clientOptions) {
       id = randomID();
       options = Object.freeze({
         baseUrl: finalBaseUrl,
-        fetch,
+        fetch: fetch2,
         parseAs,
         querySerializer,
         bodySerializer,
@@ -996,7 +1134,7 @@ function createClient(clientOptions) {
     }
     if (!response) {
       try {
-        response = await fetch(request, requestInitExt);
+        response = await fetch2(request, requestInitExt);
       } catch (error210) {
         let errorAfterMiddleware = error210;
         if (finalMiddlewares.length) {
@@ -17548,7 +17686,7 @@ function mapReducerExit(code, signal) {
   if (code === 2) return 2;
   return 4;
 }
-function runReducer(resolution, reducerArgs, spawn) {
+function runReducer(resolution, reducerArgs, spawn2) {
   const argv = [...resolution.prefixArgs, ...reducerArgs];
   return new Promise((resolve) => {
     let settled = false;
@@ -17557,13 +17695,13 @@ function runReducer(resolution, reducerArgs, spawn) {
       settled = true;
       resolve(code);
     };
-    const child = spawn(resolution.command, argv);
+    const child = spawn2(resolution.command, argv);
     child.on("error", (err) => finish(err.code === "ENOENT" ? 2 : 4));
     child.on("exit", (code, signal) => finish(mapReducerExit(code, signal)));
   });
 }
 var DEFAULT_MAX_CAPTURE_BYTES = 128 * 1024 * 1024;
-function runReducerCapture(resolution, reducerArgs, spawn, maxBytes = DEFAULT_MAX_CAPTURE_BYTES) {
+function runReducerCapture(resolution, reducerArgs, spawn2, maxBytes = DEFAULT_MAX_CAPTURE_BYTES) {
   const argv = [...resolution.prefixArgs, ...reducerArgs];
   return new Promise((resolve) => {
     let settled = false;
@@ -17575,7 +17713,7 @@ function runReducerCapture(resolution, reducerArgs, spawn, maxBytes = DEFAULT_MA
       settled = true;
       resolve({ exit, stdout: Buffer.concat(chunks).toString("utf8"), overflow });
     };
-    const child = spawn(resolution.command, argv);
+    const child = spawn2(resolution.command, argv);
     child.stdout?.on("data", (chunk) => {
       if (overflow) return;
       const buf = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
@@ -18468,6 +18606,17 @@ function renderError(err, opts) {
     return renderError(err.detail.cause, opts);
   }
   if (err instanceof CredentialsErrorThrowable) {
+    if (err.detail.kind === "lock_contended") {
+      const age = err.detail.ageMs === null ? "" : ` (held for ${Math.round(err.detail.ageMs / 1e3)}s)`;
+      return `${red("Error", color)}: another auth command is updating credentials; lock held at ${err.detail.path}${age}.
+  If no other det command is running, remove it: rm ${err.detail.path}
+`;
+    }
+    if (err.detail.kind === "lock_release_failed") {
+      return `${red("Error", color)}: the credentials update completed, but its lock at ${err.detail.path} could not be removed.
+  Any credentials written by this command are saved. Remove the lock before the next auth command: rm ${err.detail.path}
+`;
+    }
     const map2 = {
       symlink_refused: `credentials file at ${err.detail.path} is a symlink; refusing to read/write`,
       permissive_mode: `credentials file at ${err.detail.path} has overly permissive mode; run \`chmod 0600 ${err.detail.path}\``,
@@ -19263,6 +19412,808 @@ async function readSinglePipeLine(stdin) {
   });
 }
 
+// src/commands/auth-signup.ts
+import { setTimeout as delay2 } from "node:timers/promises";
+
+// src/device/device-flow.ts
+import { spawn } from "node:child_process";
+
+// src/device/device-flow-core.ts
+var MIN_SLEEP_MS = 1e3;
+var REDELIVERY_WINDOW_MS = 6e4;
+var TRANSPORT_RETRY_MAX_MS = 5e3;
+var MAX_DEVICE_CODE_CHARS = 2048;
+var MAX_USER_CODE_CHARS = 64;
+var MAX_API_KEY_CHARS = 512;
+var MAX_VERIFICATION_URL_CHARS = 2048;
+var MAX_ERROR_CODE_CHARS = 64;
+var MAX_ERROR_MESSAGE_CHARS = 2048;
+function exitCodeForDeviceFlowError(error51) {
+  if (error51.kind === "caller") return 2;
+  if (error51.kind === "server") return 3;
+  return 4;
+}
+var MESSAGES = {
+  createInputInvalid: "The server rejected the device authorization request as invalid. Update the CLI and try again.",
+  createOriginRejected: "The server refused a device authorization request from this client. Update the CLI and try again.",
+  createPayloadTooLarge: "The device authorization request was larger than the server accepts.",
+  createConfigError: "The server is not configured for device authorization. Try again later or contact support.",
+  createInternal: "The server failed while creating the device session. Wait a moment and run the command again.",
+  createProtocolError: "The server returned a device authorization response the CLI could not understand.",
+  createStatusMismatch: "The server returned a device authorization response whose HTTP status contradicts its error code.",
+  createRetryAfterUnusable: "The server rate-limited the device authorization request without a usable Retry-After header.",
+  pollExpiredToken: "The device code expired before it was approved in the browser. Run the command again to start a new session.",
+  pollAccessDenied: "The sign-in was denied in the browser. Run the command again to start a new session.",
+  pollInvalidGrant: "The device code is no longer valid. Run the command again to start a new session.",
+  pollKeyLimitReached: "This account has reached its API key limit. Revoke an unused key in the dashboard, then run the command again.",
+  pollConfigError: "The server is not configured to complete device authorization. Try again later or contact support.",
+  pollInternal: "The server failed while completing device authorization. Wait a moment and run the command again.",
+  pollProtocolError: "The server returned a token response the CLI could not understand.",
+  pollStatusMismatch: "The server returned a token response whose HTTP status contradicts its error code.",
+  pollRetryAfterUnusable: "The server rate-limited the token request without a usable Retry-After header.",
+  rateLimitedTerminal: "Rate limiting would outlast the remaining device code lifetime. Run the command again to start a new session.",
+  recoveryExhausted: "Lost contact with the server while an API key may have been issued. Check the dashboard and revoke any unexpected key before running the command again."
+};
+function callerError(code, message) {
+  return { kind: "caller", code, message };
+}
+function serverError(code, message) {
+  return { kind: "server", code, message };
+}
+function mintUncertainServerError(code, message) {
+  return { kind: "server", code, message, mayHaveMintedWarning: true };
+}
+function unrecognizedCodeError(rawCode) {
+  return serverError(
+    "unrecognized_error_code",
+    `The server returned an unrecognized error code: ${sanitizeForTerminal(rawCode, MAX_ERROR_CODE_CHARS)}`
+  );
+}
+function isForbiddenForTerminal(codeUnit) {
+  if (codeUnit < 32) return true;
+  if (codeUnit >= 127 && codeUnit <= 159) return true;
+  if (codeUnit === 1564) return true;
+  if (codeUnit === 8206 || codeUnit === 8207) return true;
+  if (codeUnit >= 8234 && codeUnit <= 8238) return true;
+  return codeUnit >= 8294 && codeUnit <= 8297;
+}
+function sanitizeForTerminal(value, maxLen) {
+  let out = "";
+  for (let i = 0; i < value.length; i += 1) {
+    if (!isForbiddenForTerminal(value.charCodeAt(i))) out += value[i];
+  }
+  return out.slice(0, maxLen);
+}
+function canonicalizeHost(host) {
+  try {
+    return { ok: true, origin: validateHost(host).origin };
+  } catch (err) {
+    if (err instanceof InvalidHostError) return { ok: false, reason: err.reason };
+    return { ok: false, reason: "not_a_url" };
+  }
+}
+function validateVerificationUrl(raw, canonicalOrigin) {
+  if (raw.length === 0) return { ok: false, reason: "empty" };
+  if (raw.length > MAX_VERIFICATION_URL_CHARS) return { ok: false, reason: "too_long" };
+  let url2;
+  try {
+    url2 = new URL(raw);
+  } catch {
+    return { ok: false, reason: "not_a_url" };
+  }
+  if (url2.protocol !== "https:" && url2.protocol !== "http:") {
+    return { ok: false, reason: "unsupported_scheme" };
+  }
+  if (url2.username || url2.password) return { ok: false, reason: "userinfo_not_allowed" };
+  if (url2.origin !== canonicalOrigin) return { ok: false, reason: "cross_origin" };
+  return { ok: true, href: url2.href };
+}
+function parseRetryAfter(header) {
+  if (header === null) return null;
+  const trimmed = header.trim();
+  if (!/^[0-9]+$/.test(trimmed)) return null;
+  const seconds = Number(trimmed);
+  if (!Number.isSafeInteger(seconds)) return null;
+  const ms = seconds * 1e3;
+  return Number.isSafeInteger(ms) ? ms : null;
+}
+var CreateResponseSchema = external_exports.looseObject({
+  device_code: external_exports.string().min(1).max(MAX_DEVICE_CODE_CHARS),
+  user_code: external_exports.string().min(1).max(MAX_USER_CODE_CHARS),
+  verification_uri: external_exports.string().min(1).max(MAX_VERIFICATION_URL_CHARS),
+  verification_uri_complete: external_exports.string().min(1).max(MAX_VERIFICATION_URL_CHARS),
+  expires_in: external_exports.number().int().min(1).max(86400),
+  interval: external_exports.number().int().min(1).max(3600)
+});
+var TokenSuccessSchema = external_exports.looseObject({ api_key: external_exports.string().min(1).max(MAX_API_KEY_CHARS) });
+var ErrorEnvelopeSchema2 = external_exports.looseObject({
+  error: external_exports.looseObject({
+    // 64 is the documented bound for wire error codes; an over-long "code" is not a
+    // classified outcome but a protocol error.
+    code: external_exports.string().min(1).max(64),
+    message: external_exports.string().min(1).max(MAX_ERROR_MESSAGE_CHARS)
+  })
+});
+function parseJson(bodyText) {
+  try {
+    return JSON.parse(bodyText);
+  } catch {
+    return void 0;
+  }
+}
+function decodeErrorCode(bodyText) {
+  const parsed = ErrorEnvelopeSchema2.safeParse(parseJson(bodyText));
+  return parsed.success ? parsed.data.error.code : null;
+}
+var CREATE_CODE_STATUS = /* @__PURE__ */ new Map([
+  ["input_invalid", 400],
+  ["origin_rejected", 403],
+  ["payload_too_large", 413],
+  ["rate_limited", 429],
+  ["config_error", 500],
+  ["internal", 500]
+]);
+function parseCreateResponse(status, bodyText, retryAfterHeader) {
+  if (status === 200) {
+    const parsed = CreateResponseSchema.safeParse(parseJson(bodyText));
+    if (!parsed.success) {
+      return { ok: false, error: serverError("protocol_error", MESSAGES.createProtocolError) };
+    }
+    const body = parsed.data;
+    return {
+      ok: true,
+      session: {
+        deviceCode: body.device_code,
+        userCode: body.user_code,
+        verificationUri: body.verification_uri,
+        verificationUriComplete: body.verification_uri_complete,
+        expiresInMs: body.expires_in * 1e3,
+        intervalMs: body.interval * 1e3
+      }
+    };
+  }
+  const code = decodeErrorCode(bodyText);
+  if (code === null) {
+    return { ok: false, error: serverError("protocol_error", MESSAGES.createProtocolError) };
+  }
+  const documentedStatus = CREATE_CODE_STATUS.get(code);
+  if (documentedStatus !== void 0 && status !== documentedStatus) {
+    return { ok: false, error: serverError("protocol_error", MESSAGES.createStatusMismatch) };
+  }
+  if (code === "rate_limited") {
+    const retryAfterMs = parseRetryAfter(retryAfterHeader);
+    if (retryAfterMs === null) {
+      return { ok: false, error: serverError("protocol_error", MESSAGES.createRetryAfterUnusable) };
+    }
+    return {
+      ok: false,
+      error: callerError(
+        "rate_limited",
+        `The server is rate limiting device authorization \u2014 try again in ${retryAfterMs / 1e3} s.`
+      )
+    };
+  }
+  switch (code) {
+    case "input_invalid":
+      return { ok: false, error: callerError(code, MESSAGES.createInputInvalid) };
+    case "origin_rejected":
+      return { ok: false, error: callerError(code, MESSAGES.createOriginRejected) };
+    case "payload_too_large":
+      return { ok: false, error: callerError(code, MESSAGES.createPayloadTooLarge) };
+    case "config_error":
+      return { ok: false, error: serverError(code, MESSAGES.createConfigError) };
+    case "internal":
+      return { ok: false, error: serverError(code, MESSAGES.createInternal) };
+    default:
+      return { ok: false, error: unrecognizedCodeError(code) };
+  }
+}
+var POLL_CODE_STATUS = /* @__PURE__ */ new Map([
+  ["authorization_pending", 400],
+  ["slow_down", 400],
+  ["expired_token", 400],
+  ["access_denied", 400],
+  ["invalid_grant", 400],
+  ["terms_not_accepted", 403],
+  ["api_key_limit_reached", 403],
+  ["rate_limited", 429],
+  ["config_error", 500],
+  ["internal", 500]
+]);
+function parsePollResponse(status, bodyText, retryAfterHeader) {
+  if (status === 200) {
+    const parsed = TokenSuccessSchema.safeParse(parseJson(bodyText));
+    if (!parsed.success) {
+      return { kind: "fail", error: serverError("protocol_error", MESSAGES.pollProtocolError) };
+    }
+    return { kind: "key", apiKey: parsed.data.api_key };
+  }
+  const code = decodeErrorCode(bodyText);
+  if (code === null) {
+    return { kind: "fail", error: serverError("protocol_error", MESSAGES.pollProtocolError) };
+  }
+  const documentedStatus = POLL_CODE_STATUS.get(code);
+  if (documentedStatus !== void 0 && status !== documentedStatus) {
+    return { kind: "fail", error: serverError("protocol_error", MESSAGES.pollStatusMismatch) };
+  }
+  switch (code) {
+    case "authorization_pending":
+      return { kind: "retry", cls: "pending" };
+    case "slow_down":
+      return { kind: "retry", cls: "slow_down" };
+    case "terms_not_accepted":
+      return { kind: "retry", cls: "terms" };
+    case "rate_limited": {
+      const retryAfterMs = parseRetryAfter(retryAfterHeader);
+      if (retryAfterMs === null) {
+        return {
+          kind: "fail",
+          error: serverError("protocol_error", MESSAGES.pollRetryAfterUnusable)
+        };
+      }
+      return { kind: "retry", cls: "rate_limited", retryAfterMs };
+    }
+    case "expired_token":
+      return { kind: "fail", error: callerError(code, MESSAGES.pollExpiredToken) };
+    case "access_denied":
+      return { kind: "fail", error: callerError(code, MESSAGES.pollAccessDenied) };
+    case "invalid_grant":
+      return { kind: "fail", error: callerError(code, MESSAGES.pollInvalidGrant) };
+    case "api_key_limit_reached":
+      return { kind: "fail", error: callerError(code, MESSAGES.pollKeyLimitReached) };
+    case "config_error":
+      return { kind: "fail", error: mintUncertainServerError(code, MESSAGES.pollConfigError) };
+    case "internal":
+      return { kind: "fail", error: mintUncertainServerError(code, MESSAGES.pollInternal) };
+    default:
+      return { kind: "fail", error: unrecognizedCodeError(code) };
+  }
+}
+function activeBudgetMs(state) {
+  if (state.authorizationRemainingMs >= MIN_SLEEP_MS) return state.authorizationRemainingMs;
+  const anchor = state.redeliveryAnchorRemainingMs;
+  if (anchor !== null && anchor >= MIN_SLEEP_MS) return anchor;
+  return state.authorizationRemainingMs;
+}
+function clampSleep(requestedMs, budgetMs) {
+  return Math.min(Math.max(requestedMs, MIN_SLEEP_MS), budgetMs);
+}
+function budgetExhaustedError(state) {
+  const anchor = state.redeliveryAnchorRemainingMs;
+  if (anchor !== null && anchor > 0) {
+    return {
+      kind: "network",
+      code: "recovery_exhausted",
+      message: MESSAGES.recoveryExhausted,
+      mayHaveMintedWarning: state.mayHaveMinted
+    };
+  }
+  return {
+    kind: "caller",
+    code: "expired_token",
+    message: MESSAGES.pollExpiredToken,
+    mayHaveMintedWarning: state.mayHaveMinted
+  };
+}
+function decideDispatch(state) {
+  if (activeBudgetMs(state) < MIN_SLEEP_MS) {
+    return { decision: { kind: "fail", error: budgetExhaustedError(state) }, state };
+  }
+  return { decision: { kind: "poll" }, state: { ...state, mayHaveMinted: true } };
+}
+function decideTransportFailure(state, attemptElapsedMs, dispatchedInDeadline) {
+  const next = {
+    ...state,
+    redeliveryAnchorRemainingMs: dispatchedInDeadline ? REDELIVERY_WINDOW_MS - attemptElapsedMs : state.redeliveryAnchorRemainingMs,
+    mayHaveMinted: true
+  };
+  const budget = activeBudgetMs(next);
+  if (budget < MIN_SLEEP_MS) {
+    return {
+      decision: {
+        kind: "fail",
+        error: {
+          kind: "network",
+          code: "recovery_exhausted",
+          message: MESSAGES.recoveryExhausted,
+          mayHaveMintedWarning: true
+        }
+      },
+      state: next
+    };
+  }
+  return {
+    decision: {
+      kind: "sleep",
+      ms: clampSleep(Math.min(next.intervalMs, TRANSPORT_RETRY_MAX_MS), budget)
+    },
+    state: next
+  };
+}
+function decidePollOutcome(state, outcome) {
+  if (outcome.kind === "key") {
+    return {
+      decision: { kind: "done", apiKey: outcome.apiKey },
+      state: { ...state, mayHaveMinted: false, redeliveryAnchorRemainingMs: null }
+    };
+  }
+  if (outcome.kind === "fail") {
+    return {
+      decision: {
+        kind: "fail",
+        error: {
+          ...outcome.error,
+          mayHaveMintedWarning: state.mayHaveMinted || outcome.error.mayHaveMintedWarning === true
+        }
+      },
+      state
+    };
+  }
+  const budget = activeBudgetMs(state);
+  if (budget < MIN_SLEEP_MS) {
+    return { decision: { kind: "fail", error: budgetExhaustedError(state) }, state };
+  }
+  if (outcome.cls === "rate_limited") {
+    const retryAfterMs = outcome.retryAfterMs ?? 0;
+    if (retryAfterMs >= budget) {
+      return {
+        decision: {
+          kind: "fail",
+          error: {
+            kind: "caller",
+            code: "rate_limited",
+            message: MESSAGES.rateLimitedTerminal,
+            mayHaveMintedWarning: state.mayHaveMinted
+          }
+        },
+        state
+      };
+    }
+    return { decision: { kind: "sleep", ms: clampSleep(retryAfterMs, budget) }, state };
+  }
+  const requestedMs = outcome.cls === "slow_down" ? state.intervalMs * 2 : state.intervalMs;
+  const showHint = outcome.cls === "terms" && !state.tosHintShown;
+  return {
+    decision: {
+      kind: "sleep",
+      ms: clampSleep(requestedMs, budget),
+      ...showHint ? { hint: "terms_not_accepted" } : {}
+    },
+    state: {
+      ...state,
+      slowDownActive: outcome.cls === "slow_down",
+      tosHintShown: state.tosHintShown || outcome.cls === "terms"
+    }
+  };
+}
+function decideNext(state, event) {
+  switch (event.type) {
+    case "dispatch":
+      return decideDispatch(state);
+    case "transport_failure":
+      return decideTransportFailure(state, event.attemptElapsedMs, event.dispatchedInDeadline);
+    case "poll_outcome":
+      return decidePollOutcome(state, event.outcome);
+  }
+}
+
+// src/device/device-flow.ts
+var CREATE_TIMEOUT_MS = 3e4;
+var POLL_TIMEOUT_CEILING_MS = 3e4;
+var MAX_RESPONSE_BYTES = 64 * 1024;
+var SAVE_ATTEMPTS = 3;
+var SAVE_RETRY_DELAY_MS = 250;
+var MAX_USER_CODE_DISPLAY_CHARS = 64;
+var MESSAGES2 = {
+  createTransportFailure: "Could not reach the server to start device authorization. Check the network and run the command again.",
+  verificationUrlUntrusted: "The server returned a verification URL the CLI will not open. Update the CLI and try again.",
+  oversizedResponse: "The server returned a response larger than the CLI accepts."
+};
+var ResponseTooLargeError = class extends Error {
+  constructor() {
+    super("response body exceeded the 64 KiB cap");
+    this.name = "ResponseTooLargeError";
+  }
+};
+async function runDeviceAuthFlow(opts, deps) {
+  const canonical = canonicalizeHost(opts.host);
+  if (!canonical.ok) {
+    deps.writeErr(
+      renderError(new InvalidHostError(opts.host, canonical.reason), { color: opts.color })
+    );
+    return 2;
+  }
+  try {
+    return await deps.withCredentialsLock(
+      deps.env,
+      () => runUnderLock(canonical.origin, opts, deps)
+    );
+  } catch (err) {
+    if (err instanceof CredentialsErrorThrowable) {
+      deps.writeErr(renderError(err, { color: opts.color }));
+      return 2;
+    }
+    throw err;
+  }
+}
+async function runUnderLock(origin, opts, deps) {
+  const aborter = new AbortController();
+  const interrupt = { signalled: false, mayHaveMinted: false, keyUnsaved: false };
+  const unregister = deps.onSignal(() => {
+    interrupt.signalled = true;
+    aborter.abort();
+  });
+  try {
+    return await runSession(origin, opts, deps, aborter, interrupt);
+  } finally {
+    unregister();
+  }
+}
+async function runSession(origin, opts, deps, aborter, interrupt) {
+  const createUrl = `${origin}/api/v1/device/code`;
+  const tokenUrl = `${origin}/api/v1/device/token`;
+  let statusLineOpen = false;
+  let lastStatusLabel = null;
+  const fail = (error51) => {
+    endStatusLine();
+    if (error51.mayHaveMintedWarning === true) warnMayHaveMinted(deps);
+    deps.writeErr(renderError(toRenderable(error51), { color: opts.color }));
+    return exitCodeForDeviceFlowError(error51);
+  };
+  const interrupted = () => {
+    endStatusLine();
+    if (interrupt.keyUnsaved) warnKeyUnsaved(deps);
+    else if (interrupt.mayHaveMinted) warnMayHaveMinted(deps);
+    deps.writeErr("Interrupted before the device authorization finished.\n");
+    return 4;
+  };
+  function endStatusLine() {
+    if (!statusLineOpen) return;
+    statusLineOpen = false;
+    deps.writeOut("\n");
+  }
+  async function persist(apiKey) {
+    interrupt.keyUnsaved = true;
+    const credentials = { host: origin, apiKey };
+    let lastError;
+    for (let attempt = 1; attempt <= SAVE_ATTEMPTS; attempt += 1) {
+      let stored = false;
+      try {
+        await deps.saveCredentials(credentials, deps.env);
+        stored = true;
+      } catch (err) {
+        lastError = err;
+      }
+      if (interrupt.signalled) return interrupted();
+      if (stored) {
+        interrupt.keyUnsaved = false;
+        interrupt.mayHaveMinted = false;
+        endStatusLine();
+        deps.writeOut(`Saved credentials to ${credentialsPath(deps.env)}
+`);
+        deps.writeOut("Run: det validate --sample\n");
+        return 0;
+      }
+      if (attempt === SAVE_ATTEMPTS) break;
+      try {
+        await deps.sleep(SAVE_RETRY_DELAY_MS, aborter.signal);
+      } catch (sleepErr) {
+        if (interrupt.signalled) return interrupted();
+        throw sleepErr;
+      }
+      if (interrupt.signalled) return interrupted();
+    }
+    endStatusLine();
+    deps.writeErr(
+      "Error: an API key was issued but could not be saved \u2014 revoke it in the dashboard, then run the command again to mint a new one.\n"
+    );
+    deps.writeErr(
+      "The issued key cannot be recovered: re-running the command starts a new device session.\n"
+    );
+    if (lastError instanceof CredentialsErrorThrowable) {
+      deps.writeErr(renderError(lastError, { color: opts.color }));
+    }
+    return 2;
+  }
+  function showStatus(label, remainingMs) {
+    if (opts.isTTY) {
+      deps.writeOut(`\r${label} (expires in ${formatRemaining(remainingMs)})`.padEnd(72));
+      statusLineOpen = true;
+      return;
+    }
+    if (label === lastStatusLabel) return;
+    lastStatusLabel = label;
+    deps.writeOut(`${label}
+`);
+  }
+  let createResponse;
+  try {
+    createResponse = await deps.fetch(createUrl, {
+      method: "POST",
+      // No body, no Content-Type, and no manual Origin / Sec-Fetch-Site: a caller
+      // sending neither is classified `headless` server-side and allowed (D11/F1).
+      redirect: "error",
+      signal: AbortSignal.any([deps.abortTimeout(CREATE_TIMEOUT_MS), aborter.signal])
+    });
+  } catch {
+    if (interrupt.signalled) return interrupted();
+    return fail({
+      kind: "network",
+      code: "transport_failure",
+      message: MESSAGES2.createTransportFailure
+    });
+  }
+  let createBody;
+  try {
+    createBody = await readCappedText(createResponse);
+  } catch (err) {
+    if (interrupt.signalled) return interrupted();
+    if (err instanceof ResponseTooLargeError) {
+      return fail({ kind: "server", code: "protocol_error", message: MESSAGES2.oversizedResponse });
+    }
+    return fail({
+      kind: "network",
+      code: "transport_failure",
+      message: MESSAGES2.createTransportFailure
+    });
+  }
+  const created = parseCreateResponse(
+    createResponse.status,
+    createBody,
+    createResponse.headers.get("retry-after")
+  );
+  if (!created.ok) return fail(created.error);
+  const session = created.session;
+  const deadlineAnchor = deps.now();
+  const verificationUri = validateVerificationUrl(session.verificationUri, origin);
+  const verificationComplete = validateVerificationUrl(session.verificationUriComplete, origin);
+  if (!verificationUri.ok || !verificationComplete.ok) {
+    return fail({
+      kind: "server",
+      code: "protocol_error",
+      message: MESSAGES2.verificationUrlUntrusted
+    });
+  }
+  deps.writeOut(
+    `Confirm code: ${sanitizeForTerminal(session.userCode, MAX_USER_CODE_DISPLAY_CHARS)}
+`
+  );
+  deps.writeOut(`Open: ${verificationComplete.href}
+`);
+  deps.writeOut(`Or visit ${verificationUri.href} and enter the code.
+`);
+  deps.writeOut("Check that the browser shows the same code before approving.\n");
+  if (opts.isTTY && !opts.noBrowser) openBrowser(deps, verificationComplete.href);
+  let state = {
+    authorizationRemainingMs: session.expiresInMs,
+    redeliveryAnchorRemainingMs: null,
+    intervalMs: session.intervalMs,
+    mayHaveMinted: false,
+    slowDownActive: false,
+    tosHintShown: false
+  };
+  let anchorAt = null;
+  const refresh = (current) => {
+    const now = deps.now();
+    return {
+      ...current,
+      authorizationRemainingMs: session.expiresInMs - (now - deadlineAnchor),
+      redeliveryAnchorRemainingMs: anchorAt === null ? null : anchorAt - now
+    };
+  };
+  const commit = (step) => {
+    state = step.state;
+    anchorAt = step.state.redeliveryAnchorRemainingMs === null ? null : deps.now() + step.state.redeliveryAnchorRemainingMs;
+    interrupt.mayHaveMinted = step.state.mayHaveMinted;
+  };
+  for (; ; ) {
+    state = refresh(state);
+    const admission = decideNext(state, { type: "dispatch" });
+    if (admission.decision.kind === "fail") return fail(admission.decision.error);
+    interrupt.mayHaveMinted = true;
+    const attemptStart = deps.now();
+    const timeoutMs = Math.min(POLL_TIMEOUT_CEILING_MS, activeBudgetMs(state));
+    const dispatchedInDeadline = state.authorizationRemainingMs >= MIN_SLEEP_MS;
+    let event;
+    try {
+      const response = await deps.fetch(tokenUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ device_code: session.deviceCode }),
+        redirect: "error",
+        signal: AbortSignal.any([deps.abortTimeout(timeoutMs), aborter.signal])
+      });
+      const bodyText = await readCappedText(response);
+      event = {
+        type: "poll_outcome",
+        outcome: parsePollResponse(response.status, bodyText, response.headers.get("retry-after"))
+      };
+    } catch (err) {
+      if (interrupt.signalled) return interrupted();
+      if (err instanceof ResponseTooLargeError) {
+        return fail({ kind: "server", code: "protocol_error", message: MESSAGES2.oversizedResponse });
+      }
+      event = {
+        type: "transport_failure",
+        attemptElapsedMs: deps.now() - attemptStart,
+        dispatchedInDeadline
+      };
+    }
+    state = refresh(state);
+    const step = decideNext(state, event);
+    commit(step);
+    const decision = step.decision;
+    if (decision.kind === "done") return await persist(decision.apiKey);
+    if (decision.kind === "fail") return fail(decision.error);
+    if (decision.kind !== "sleep") continue;
+    if (decision.hint === "terms_not_accepted") {
+      endStatusLine();
+      deps.writeOut("Accept the updated terms in the browser to continue.\n");
+    }
+    showStatus(statusLabel(event), state.authorizationRemainingMs);
+    try {
+      await deps.sleep(decision.ms, aborter.signal);
+    } catch (err) {
+      if (interrupt.signalled) return interrupted();
+      throw err;
+    }
+  }
+}
+function warnMayHaveMinted(deps) {
+  deps.writeErr(
+    "Warning: an API key may have been issued \u2014 revoke any unexpected key in the dashboard before running the command again.\n"
+  );
+}
+function warnKeyUnsaved(deps) {
+  deps.writeErr(
+    "Warning: an API key was issued but has not been saved \u2014 revoke it in the dashboard before running the command again.\n"
+  );
+}
+function statusLabel(event) {
+  if (event.type === "transport_failure") return "Lost contact with the server; retrying\u2026";
+  if (event.type === "poll_outcome" && event.outcome.kind === "retry") {
+    if (event.outcome.cls === "slow_down") return "Server asked for a slower poll; waiting\u2026";
+    if (event.outcome.cls === "rate_limited") return "Rate limited by the server; waiting\u2026";
+    if (event.outcome.cls === "terms") return "Waiting for the terms to be accepted\u2026";
+  }
+  return "Waiting for browser approval\u2026";
+}
+function formatRemaining(remainingMs) {
+  const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1e3));
+  const minutes = Math.floor(totalSeconds / 60);
+  return minutes > 0 ? `${minutes}m` : `${totalSeconds}s`;
+}
+function toRenderable(error51) {
+  const kind = error51.kind;
+  if (kind === "network") return { kind, cause: new Error(error51.message) };
+  return { kind, code: error51.code, message: error51.message };
+}
+function openerArgv(platform, href) {
+  if (platform === "darwin") return ["open", [href]];
+  if (platform === "win32") return ["rundll32", ["url.dll,FileProtocolHandler", href]];
+  return ["xdg-open", [href]];
+}
+function openBrowser(deps, href) {
+  try {
+    const [command, args] = openerArgv(deps.platform, href);
+    deps.spawnOpener(command, args).unref();
+  } catch {
+  }
+}
+function spawnPlatformOpener(command, args) {
+  const child = spawn(command, [...args], { detached: true, stdio: "ignore" });
+  child.on("error", () => void 0);
+  return child;
+}
+async function readCappedText(response) {
+  const body = response.body;
+  if (!body) return await response.text();
+  const reader = body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    for (; ; ) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > MAX_RESPONSE_BYTES) throw new ResponseTooLargeError();
+      chunks.push(value);
+    }
+  } catch (err) {
+    await reader.cancel().catch(() => void 0);
+    throw err;
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(merged);
+}
+
+// src/commands/auth-signup.ts
+var authSignupCommand = defineCommand({
+  meta: {
+    name: "signup",
+    description: "Create an account and API key in the browser (device code handoff) and store it under XDG."
+  },
+  args: {
+    host: {
+      type: "string",
+      description: "API host URL (https:// preferred; http:// only on loopback).",
+      required: false
+    },
+    "no-browser": {
+      type: "boolean",
+      description: "Print the verification URL instead of opening a browser.",
+      required: false
+    }
+  },
+  async run({ args }) {
+    process.exit(await runDeviceHandoff(args.host, isNoBrowser(args)));
+  }
+});
+function isNoBrowser(args) {
+  return args.browser === false;
+}
+function resolveDeviceHost(flag, env) {
+  return flag ?? env.DETERMINISTIC_HOST ?? DEFAULT_HOST;
+}
+async function runDeviceHandoff(hostFlag, noBrowser) {
+  return await runDeviceAuthFlow(
+    {
+      host: resolveDeviceHost(hostFlag, process.env),
+      noBrowser,
+      color: Boolean(process.stdout.isTTY) && !process.env.NO_COLOR,
+      isTTY: Boolean(process.stdout.isTTY)
+    },
+    nodeDeviceFlowDeps()
+  );
+}
+function nodeDeviceFlowDeps() {
+  return {
+    fetch: (url2, init) => fetch(url2, init),
+    // `node:timers/promises` already rejects with an AbortError when the signal
+    // fires, which is exactly the wake-up semantics the flow's signal path needs.
+    sleep: async (ms, signal) => {
+      await delay2(ms, void 0, signal ? { signal } : void 0);
+    },
+    // Monotonic (a backward wall-clock adjustment must not extend polling, D3/AC18)
+    // and floored to whole milliseconds: the seam is integer-ms by contract (§2.3),
+    // and `AbortSignal.timeout` rejects a fractional delay outright.
+    now: () => Math.floor(performance.now()),
+    abortTimeout: (ms) => AbortSignal.timeout(ms),
+    spawnOpener: spawnPlatformOpener,
+    writeOut: (text) => {
+      process.stdout.write(text);
+    },
+    writeErr: (text) => {
+      process.stderr.write(text);
+    },
+    env: process.env,
+    platform: process.platform,
+    onSignal,
+    saveCredentials,
+    withCredentialsLock
+  };
+}
+function onSignal(handler) {
+  const removers = ["SIGINT", "SIGTERM"].map((name) => {
+    const listener = () => {
+      handler(name);
+    };
+    process.on(name, listener);
+    return () => {
+      process.off(name, listener);
+    };
+  });
+  return () => {
+    for (const remove of removers) remove();
+  };
+}
+
 // src/commands/auth-login.ts
 var authLoginCommand = defineCommand({
   meta: {
@@ -19274,9 +20225,22 @@ var authLoginCommand = defineCommand({
       type: "string",
       description: "API host URL (https:// preferred; http:// only on loopback).",
       required: false
+    },
+    device: {
+      type: "boolean",
+      description: "Authorize in the browser (device code handoff) instead of pasting a key.",
+      required: false
+    },
+    "no-browser": {
+      type: "boolean",
+      description: "With --device: print the verification URL instead of opening a browser.",
+      required: false
     }
   },
   async run({ args }) {
+    if (args.device === true) {
+      process.exit(await runDeviceHandoff(args.host, isNoBrowser(args)));
+    }
     const color = process.stdout.isTTY && !process.env.NO_COLOR;
     try {
       const host = await resolveLoginHost(args.host);
@@ -19290,7 +20254,9 @@ var authLoginCommand = defineCommand({
         process.stderr.write("Error: no API key provided\n");
         process.exit(2);
       }
-      await saveCredentials({ host, apiKey }, process.env);
+      await withCredentialsLock(process.env, () => saveCredentials({ host, apiKey }, process.env), {
+        contention: "retry"
+      });
       process.stdout.write(`Saved credentials to ${credentialsPath(process.env)}
 `);
       process.exit(0);
@@ -19326,7 +20292,9 @@ var authLogoutCommand = defineCommand({
   async run() {
     const targetPath = credentialsPath(process.env);
     try {
-      await deleteCredentials(process.env);
+      await withCredentialsLockNoProvision(process.env, () => deleteCredentials(process.env), {
+        contention: "retry"
+      });
       process.stdout.write(`Removed credentials at ${targetPath}
 `);
       process.exit(0);
@@ -19553,6 +20521,7 @@ var authCommand = defineCommand({
     description: "Manage API key credentials."
   },
   subCommands: {
+    signup: authSignupCommand,
     login: authLoginCommand,
     logout: authLogoutCommand,
     whoami: authWhoamiCommand
