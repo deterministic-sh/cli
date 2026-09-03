@@ -20259,6 +20259,7 @@ var authLoginCommand = defineCommand({
       });
       process.stdout.write(`Saved credentials to ${credentialsPath(process.env)}
 `);
+      process.stdout.write("Run: det validate --sample\n");
       process.exit(0);
     } catch (err) {
       if (err instanceof InvalidHostError || err instanceof CredentialsErrorThrowable) {
