@@ -53,7 +53,7 @@ var require_picocolors = __commonJS({
       } while (~index);
       return result + string4.substring(cursor);
     };
-    var createColors = (enabled = isColorSupported) => {
+    var createColors2 = (enabled = isColorSupported) => {
       let f = enabled ? formatter : () => String;
       return {
         isColorSupported: enabled,
@@ -100,8 +100,8 @@ var require_picocolors = __commonJS({
         bgWhiteBright: f("\x1B[107m", "\x1B[49m")
       };
     };
-    module.exports = createColors();
-    module.exports.createColors = createColors;
+    module.exports = createColors2();
+    module.exports.createColors = createColors2;
   }
 });
 
@@ -16433,6 +16433,26 @@ var AMBIGUOUS_CANONICAL_UNIT_PRECEDENCE = {
 var CANONICAL_UNIT_TO_DIMENSION = buildCanonicalUnitToDimension(CANONICAL_DIMENSION_UNITS, AMBIGUOUS_CANONICAL_UNIT_PRECEDENCE);
 var PHYSICAL_DIMENSION_SET = new Set(PHYSICAL_DIMENSIONS);
 
+// ../validation-engine/src/text-safety.ts
+function isUnsafeTextCodeUnit(codeUnit) {
+  return codeUnit >= 0 && codeUnit < 32 || // C0 controls
+  codeUnit >= 127 && codeUnit <= 159 || // DEL + C1 controls
+  codeUnit === 1564 || // ARABIC LETTER MARK
+  codeUnit >= 8206 && codeUnit <= 8207 || // LRM, RLM
+  codeUnit >= 8234 && codeUnit <= 8238 || // LRE, RLE, PDF, LRO, RLO
+  codeUnit >= 8294 && codeUnit <= 8297;
+}
+function hasUnsafeTextChar(s) {
+  for (let i = 0; i < s.length; i++) {
+    if (isUnsafeTextCodeUnit(s.charCodeAt(i))) return true;
+  }
+  return false;
+}
+var UNSAFE_ID_PLACEHOLDER = "<id with control characters>";
+function quoteIdForMessage(id) {
+  return hasUnsafeTextChar(id) ? UNSAFE_ID_PLACEHOLDER : `"${id}"`;
+}
+
 // ../validation-engine/src/limits.ts
 var KIB = 1024;
 var MIB = 1024 * KIB;
@@ -16452,6 +16472,7 @@ var MAX_HDF5_BLOCK_DECODED_BYTES = 16 * MIB;
 var MAX_ID_LEN = 256;
 var MAX_VERSION_LEN = 64;
 var MAX_DOMAIN_LEN = 64;
+var DOMAIN_PATTERN = /^[a-z0-9_-]+$/;
 var MAX_RESULT_SOURCE_LEN = 256;
 var MAX_CONTEXT_FIELD_LEN = 256;
 var MAX_CLAIM_TEXT_LEN = 2048;
@@ -16542,7 +16563,13 @@ function inlineValueByteLength(value) {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 var EvidenceItemBaseSchema = external_exports.object({
-  id: external_exports.string().max(MAX_ID_LEN),
+  // Reject the forbidden text class rather than strip it (issue 1476 D5) — an
+  // id is the caller's declaration and is later echoed to a terminal by `det`;
+  // rewriting one would change what the caller referenced. Untrimmed on
+  // purpose (whitespace-bearing ids stay referenceable from `run_manifest`).
+  id: external_exports.string().max(MAX_ID_LEN).refine((s) => !hasUnsafeTextChar(s), {
+    message: "evidence id must not contain control characters"
+  }),
   kind: EvidenceKindSchema,
   role: ArtifactRoleSchema,
   // Caller-declared semantic discriminator (issue #1032). Optional, additive,
@@ -16593,7 +16620,10 @@ var EvidenceBundleSchema = external_exports.array(EvidenceItemSchema).min(1).max
   if (duplicates.length > 0) {
     ctx.addIssue({
       code: external_exports.ZodIssueCode.custom,
-      message: `duplicate evidence id(s): ${duplicates.join(", ")}`
+      // A duplicate can itself carry the forbidden text class (the per-item
+      // refine above rejects it in parallel), so each id is rendered through
+      // the placeholder rule — bare, since this list is unquoted (issue 1476).
+      message: `duplicate evidence id(s): ${duplicates.map((id) => hasUnsafeTextChar(id) ? UNSAFE_ID_PLACEHOLDER : id).join(", ")}`
     });
   }
 });
@@ -16676,7 +16706,14 @@ function isAllowedContextProvenancePath(path4) {
 
 // ../validation-engine/src/run-manifest.ts
 function manifestString(max) {
-  return external_exports.string().max(max).transform((s) => s.trim());
+  return external_exports.string().max(max).transform((s) => s.trim()).refine((s) => !hasUnsafeTextChar(s), {
+    message: "must not contain control characters"
+  });
+}
+function referenceIdSchema() {
+  return external_exports.string().max(MAX_ID_LEN).refine((s) => !hasUnsafeTextChar(s), {
+    message: "evidence id must not contain control characters"
+  });
 }
 function manifestNonEmptyString(max) {
   return manifestString(max).refine((s) => s.length > 0, {
@@ -16692,7 +16729,7 @@ var RunManifestDigestSchema = external_exports.strictObject({
 });
 var RunManifestSolverConfigSchema = external_exports.strictObject({
   digest: RunManifestDigestSchema.optional(),
-  evidence_id: external_exports.string().max(MAX_ID_LEN).optional()
+  evidence_id: referenceIdSchema().optional()
 }).refine((sc) => sc.digest !== void 0 || sc.evidence_id !== void 0, {
   message: "solver_config requires at least one of digest or evidence_id"
 }).meta({ minProperties: 1 });
@@ -16740,10 +16777,10 @@ var RUN_MANIFEST_RELATIONSHIP_KINDS = [
 ];
 var RunManifestRelationshipSchema = external_exports.strictObject({
   kind: external_exports.enum(RUN_MANIFEST_RELATIONSHIP_KINDS),
-  target_evidence_id: external_exports.string().max(MAX_ID_LEN)
+  target_evidence_id: referenceIdSchema()
 });
 var RunManifestArtifactSchema = external_exports.strictObject({
-  evidence_id: external_exports.string().max(MAX_ID_LEN),
+  evidence_id: referenceIdSchema(),
   relationships: external_exports.array(RunManifestRelationshipSchema).max(MAX_RUN_MANIFEST_RELATIONSHIPS_LEN).optional(),
   source_dtype: RunManifestSourceDtypeSchema.optional(),
   declarations: RunManifestDeclarationsSchema.optional(),
@@ -16765,7 +16802,7 @@ var RunManifestArtifactSchema = external_exports.strictObject({
       ctx.addIssue({
         code: "custom",
         path: ["relationships", index],
-        message: `duplicate relationship edge (kind="${rel.kind}", target_evidence_id="${rel.target_evidence_id}")`
+        message: `duplicate relationship edge (kind="${rel.kind}", target_evidence_id=${quoteIdForMessage(rel.target_evidence_id)})`
       });
     }
     seenEdges.add(edgeKey);
@@ -16813,7 +16850,7 @@ function validateRunManifestCrossReferences(manifest, evidence, ctx) {
       ctx.addIssue({
         code: "custom",
         path: ["run_manifest", "artifacts", index, "evidence_id"],
-        message: `duplicate run_manifest artifact evidence_id "${artifact.evidence_id}"`
+        message: `duplicate run_manifest artifact evidence_id ${quoteIdForMessage(artifact.evidence_id)}`
       });
     }
     seenArtifactIds.add(artifact.evidence_id);
@@ -16822,13 +16859,13 @@ function validateRunManifestCrossReferences(manifest, evidence, ctx) {
       ctx.addIssue({
         code: "custom",
         path: ["run_manifest", "artifacts", index, "evidence_id"],
-        message: `run_manifest artifact references unknown evidence id "${artifact.evidence_id}"`
+        message: `run_manifest artifact references unknown evidence id ${quoteIdForMessage(artifact.evidence_id)}`
       });
     } else if (item.purpose === void 0) {
       ctx.addIssue({
         code: "custom",
         path: ["run_manifest", "artifacts", index, "evidence_id"],
-        message: `evidence item "${artifact.evidence_id}" referenced by run_manifest must declare a purpose`
+        message: `evidence item ${quoteIdForMessage(artifact.evidence_id)} referenced by run_manifest must declare a purpose`
       });
     }
     artifact.relationships?.forEach((rel, relIndex) => {
@@ -16843,7 +16880,7 @@ function validateRunManifestCrossReferences(manifest, evidence, ctx) {
             relIndex,
             "target_evidence_id"
           ],
-          message: `relationship target "${rel.target_evidence_id}" is not a member of run_manifest.artifacts`
+          message: `relationship target ${quoteIdForMessage(rel.target_evidence_id)} is not a member of run_manifest.artifacts`
         });
       }
     });
@@ -16855,13 +16892,13 @@ function validateRunManifestCrossReferences(manifest, evidence, ctx) {
       ctx.addIssue({
         code: "custom",
         path: ["run_manifest", "solver_config", "evidence_id"],
-        message: `run_manifest.solver_config references unknown evidence id "${solverConfigEvidenceId}"`
+        message: `run_manifest.solver_config references unknown evidence id ${quoteIdForMessage(solverConfigEvidenceId)}`
       });
     } else if (cfgItem.purpose !== "solver_config") {
       ctx.addIssue({
         code: "custom",
         path: ["run_manifest", "solver_config", "evidence_id"],
-        message: `run_manifest.solver_config evidence item "${solverConfigEvidenceId}" must declare purpose "solver_config"`
+        message: `run_manifest.solver_config evidence item ${quoteIdForMessage(solverConfigEvidenceId)} must declare purpose "solver_config"`
       });
     } else {
       const digest = manifest.solver_config?.digest;
@@ -16870,7 +16907,7 @@ function validateRunManifestCrossReferences(manifest, evidence, ctx) {
           ctx.addIssue({
             code: "custom",
             path: ["run_manifest", "solver_config", "digest", "value"],
-            message: `solver_config.digest.value does not match evidence item "${solverConfigEvidenceId}"'s optional_checksum_sha256`
+            message: `solver_config.digest.value does not match evidence item ${quoteIdForMessage(solverConfigEvidenceId)}'s optional_checksum_sha256`
           });
         }
       }
@@ -16880,21 +16917,18 @@ function validateRunManifestCrossReferences(manifest, evidence, ctx) {
 
 // ../validation-engine/src/request.ts
 var FLUID_ID_REGEX = /^[a-z0-9_:-]{1,64}$/;
-function hasControlChar(s) {
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    if (c <= 31 || c === 127) return true;
-  }
-  return false;
-}
 var CANONICAL_ID_JSON_SCHEMA_META = {
   maxLength: 64,
   pattern: FLUID_ID_REGEX.source
 };
-var FluidIdSchema = external_exports.string().max(MAX_CONTEXT_FIELD_LEN).transform((s) => s.trim()).refine((s) => s.length > 0, { message: "fluid_id must not be empty after trimming" }).refine((s) => s.length <= 64, { message: "fluid_id must be 64 characters or fewer" }).refine((s) => !hasControlChar(s), { message: "fluid_id must not contain control characters" }).transform((s) => s.toLowerCase()).refine((s) => FLUID_ID_REGEX.test(s), {
+var FluidIdSchema = external_exports.string().max(MAX_CONTEXT_FIELD_LEN).transform((s) => s.trim()).refine((s) => s.length > 0, { message: "fluid_id must not be empty after trimming" }).refine((s) => s.length <= 64, { message: "fluid_id must be 64 characters or fewer" }).refine((s) => !hasUnsafeTextChar(s), {
+  message: "fluid_id must not contain control characters"
+}).transform((s) => s.toLowerCase()).refine((s) => FLUID_ID_REGEX.test(s), {
   message: "fluid_id must be 1\u201364 characters of [a-z0-9_:-] after trimming and lowercasing"
 }).meta(CANONICAL_ID_JSON_SCHEMA_META);
-var MaterialIdSchema = external_exports.string().max(MAX_CONTEXT_FIELD_LEN).transform((s) => s.trim()).refine((s) => s.length > 0, { message: "material_id must not be empty after trimming" }).refine((s) => s.length <= 64, { message: "material_id must be 64 characters or fewer" }).refine((s) => !hasControlChar(s), { message: "material_id must not contain control characters" }).transform((s) => s.toLowerCase()).refine((s) => FLUID_ID_REGEX.test(s), {
+var MaterialIdSchema = external_exports.string().max(MAX_CONTEXT_FIELD_LEN).transform((s) => s.trim()).refine((s) => s.length > 0, { message: "material_id must not be empty after trimming" }).refine((s) => s.length <= 64, { message: "material_id must be 64 characters or fewer" }).refine((s) => !hasUnsafeTextChar(s), {
+  message: "material_id must not contain control characters"
+}).transform((s) => s.toLowerCase()).refine((s) => FLUID_ID_REGEX.test(s), {
   message: "material_id must be 1\u201364 characters of [a-z0-9_:-] after trimming and lowercasing"
 }).meta(CANONICAL_ID_JSON_SCHEMA_META);
 var THERMAL_CANONICAL_ID_REGEX = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -17182,7 +17216,13 @@ var ValidationContextSchema = external_exports.object({
   })
 });
 var ClaimInputSchema = external_exports.object({
-  id: external_exports.string().max(MAX_ID_LEN),
+  // Caller-declared identity the CLI later renders to a terminal (issue 1476
+  // D5): reject the forbidden text class rather than strip it — an id IS the
+  // caller's declaration, and silently rewriting one would change what they
+  // said. The message names the field, never the value.
+  id: external_exports.string().max(MAX_ID_LEN).refine((s) => !hasUnsafeTextChar(s), {
+    message: "claim id must not contain control characters"
+  }),
   kind: ClaimKindSchema,
   subject: external_exports.string().max(MAX_CLAIM_TEXT_LEN),
   expectation: external_exports.string().max(MAX_CLAIM_TEXT_LEN)
@@ -17214,7 +17254,14 @@ var ContextProvenanceSchema = external_exports.array(ContextProvenanceDeclSchema
 }).optional();
 var ValidationRequestSchema = external_exports.object({
   version: external_exports.string().max(MAX_VERSION_LEN),
-  domain: external_exports.string().max(MAX_DOMAIN_LEN),
+  // Charset via `.regex` (not `.refine`) so `z.toJSONSchema` advertises the
+  // `pattern` in OpenAPI and the MCP `tools/list` schema, same posture as
+  // `agent_id` below. Consequence of gating here (issue 1476): a malformed
+  // domain now fails pre-service as `400 invalid_request` instead of
+  // reaching the service's `422 unsupported_domain` path.
+  domain: external_exports.string().max(MAX_DOMAIN_LEN).regex(DOMAIN_PATTERN, {
+    message: "domain must be 1\u201364 characters of [a-z0-9_-]"
+  }),
   mode: ValidationModeSchema.default("instant"),
   result_source: external_exports.string().max(MAX_RESULT_SOURCE_LEN).optional(),
   context: ValidationContextSchema.default({ claimed_units: {} }),
@@ -17332,7 +17379,10 @@ var HandlerCheckResultSchema = external_exports.discriminatedUnion("status", [
 
 // ../validation-engine/src/claims.ts
 var ClaimResultSchema = external_exports.object({
-  id: external_exports.string(),
+  // Same cap as the request-side `ClaimInputSchema.id` — a report claim id is
+  // either the caller's own id echoed back or an engine-authored
+  // `default:<kind>` (issue 1476).
+  id: external_exports.string().max(MAX_ID_LEN),
   question: external_exports.string(),
   status: CheckStatusSchema,
   resolved_by: external_exports.array(external_exports.string()),
@@ -18459,143 +18509,211 @@ async function runPrepare(args, deps) {
 
 // src/output/render-json.ts
 function renderJson(value) {
-  return JSON.stringify(value, null, 2) + "\n";
+  const json2 = JSON.stringify(value, null, 2);
+  let out = "";
+  for (let i = 0; i < json2.length; i += 1) {
+    const unit = json2.charCodeAt(i);
+    if (unit >= 127 && isUnsafeTextCodeUnit(unit)) {
+      out += `\\u${unit.toString(16).padStart(4, "0")}`;
+      continue;
+    }
+    out += json2[i];
+  }
+  return `${out}
+`;
+}
+
+// src/output/terminal-safe.ts
+var import_picocolors = __toESM(require_picocolors(), 1);
+var MAX_TERMINAL_VALUE_CHARS = 4096;
+var colors = (0, import_picocolors.createColors)(true);
+function strip(value) {
+  let out = "";
+  for (let i = 0; i < value.length; i += 1) {
+    if (!isUnsafeTextCodeUnit(value.charCodeAt(i))) out += value[i];
+  }
+  return out;
+}
+function sanitizeForTerminal(value, maxLen) {
+  return strip(value).slice(0, maxLen);
+}
+function toText(v) {
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean" || typeof v === "bigint") return String(v);
+  if (v === null || v === void 0) return "?";
+  return "[non-text value]";
+}
+function display(v) {
+  const text = strip(toText(v));
+  return text.length > MAX_TERMINAL_VALUE_CHARS ? `${text.slice(0, MAX_TERMINAL_VALUE_CHARS)}\u2026` : text;
+}
+var STYLED = /* @__PURE__ */ Symbol("styled");
+function styled(text) {
+  return { [STYLED]: text };
+}
+function styledText(s) {
+  return s[STYLED];
+}
+function isStyled(v) {
+  return typeof v === "object" && v !== null && STYLED in v;
+}
+function safe(parts, ...values) {
+  let out = parts[0] ?? "";
+  for (let i = 0; i < values.length; i += 1) {
+    const v = values[i];
+    out += isStyled(v) ? styledText(v) : display(v);
+    out += parts[i + 1] ?? "";
+  }
+  return out;
+}
+function bold2(value, color) {
+  const text = display(value);
+  return styled(color ? colors.bold(text) : text);
+}
+function dim(value, color) {
+  const text = display(value);
+  return styled(color ? colors.dim(text) : text);
+}
+function red(value, color) {
+  const text = display(value);
+  return styled(color ? colors.red(text) : text);
+}
+function statusColor(value, color) {
+  const text = display(value);
+  if (!color) return styled(text);
+  if (text === "accept" || text === "pass") return styled(colors.green(text));
+  if (text === "reject" || text === "fail") return styled(colors.red(text));
+  return styled(colors.yellow(text));
+}
+function asRecord(v) {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return {};
+  return v;
+}
+function asArray(v) {
+  return Array.isArray(v) ? v : [];
 }
 
 // src/output/render-pretty.ts
-var import_picocolors = __toESM(require_picocolors(), 1);
-function bold2(s, color) {
-  return color ? import_picocolors.default.bold(s) : s;
-}
-function dim(s, color) {
-  return color ? import_picocolors.default.dim(s) : s;
-}
-function statusColor(s, color) {
-  if (!color) return s;
-  if (s === "accept" || s === "pass") return import_picocolors.default.green(s);
-  if (s === "reject" || s === "fail") return import_picocolors.default.red(s);
-  return import_picocolors.default.yellow(s);
-}
 function renderReport(report, opts) {
   const { color } = opts;
+  const r = asRecord(report);
+  const rec = asRecord(r["recommendation"]);
   const lines = [];
-  lines.push(bold2("Validation report", color));
-  const rec = report.recommendation;
-  lines.push(`  recommendation: ${statusColor(rec.action, color)} \u2014 ${rec.reason}`);
-  if (report.summary) {
-    const s = report.summary;
+  lines.push(safe`${bold2("Validation report", color)}`);
+  lines.push(safe`  recommendation: ${statusColor(rec["action"], color)} — ${rec["reason"]}`);
+  if (r["summary"]) {
+    const s = asRecord(r["summary"]);
     lines.push(
-      `  summary: total=${s.total_checks} pass=${s.definitive_passes} fail=${s.definitive_failures} uncertain=${s.uncertain} not_run=${s.not_run} overall=${statusColor(s.overall_status, color)}`
+      safe`  summary: total=${s["total_checks"]} pass=${s["definitive_passes"]} fail=${s["definitive_failures"]} uncertain=${s["uncertain"]} not_run=${s["not_run"]} overall=${statusColor(s["overall_status"], color)}`
     );
   }
-  if (rec.escalation_triggers && rec.escalation_triggers.length > 0) {
-    lines.push(`  escalation: ${rec.escalation_triggers.join(", ")}`);
+  const triggers = asArray(rec["escalation_triggers"]);
+  if (triggers.length > 0) {
+    const joined = triggers.map((t) => safe`${t}`).join(", ");
+    lines.push(safe`  escalation: ${joined}`);
   }
-  if (report.claims && report.claims.length > 0) {
+  const claims = asArray(r["claims"]);
+  if (claims.length > 0) {
     lines.push("");
-    lines.push(bold2("Claims", color));
-    for (const claim of report.claims) {
-      const c = claim;
-      lines.push(
-        `  - ${c.id ?? "?"} (${c.kind ?? "?"}): ${statusColor(c.status ?? "unknown", color)}`
-      );
-      if (c.subject) lines.push(`    ${dim(c.subject, color)}`);
+    lines.push(safe`${bold2("Claims", color)}`);
+    for (const claim of claims) {
+      const c = asRecord(claim);
+      lines.push(safe`  - ${c["id"]}: ${statusColor(c["status"], color)}`);
+      if (c["question"]) lines.push(safe`    ${dim(c["question"], color)}`);
     }
   }
-  if (report.checks && report.checks.length > 0) {
+  const checks = asArray(r["checks"]);
+  if (checks.length > 0) {
     lines.push("");
-    lines.push(bold2("Checks", color));
-    for (const check2 of report.checks) {
-      const c = check2;
-      lines.push(`  - ${c.id ?? "?"}: ${statusColor(c.status ?? "unknown", color)}`);
-      if (c.evidence) lines.push(`    ${dim(c.evidence, color)}`);
+    lines.push(safe`${bold2("Checks", color)}`);
+    for (const check2 of checks) {
+      const c = asRecord(check2);
+      lines.push(safe`  - ${c["id"]}: ${statusColor(c["status"], color)}`);
+      if (c["evidence"]) lines.push(safe`    ${dim(c["evidence"], color)}`);
     }
   }
   lines.push("");
-  return lines.join("\n") + "\n";
+  return [...lines, ""].join("\n");
 }
 function renderValidateSuccess(wrapper, opts) {
   const { color } = opts;
-  const header = `${dim("Report", color)}      ${wrapper.reportId}
-${dim("Correlation", color)} ${wrapper.correlationId}
-
-`;
-  return header + renderReport(wrapper.report, opts);
+  const w = asRecord(wrapper);
+  return [
+    safe`${dim("Report", color)}      ${w["reportId"]}\n`,
+    safe`${dim("Correlation", color)} ${w["correlationId"]}\n\n`,
+    renderReport(w["report"], opts)
+  ].join("");
 }
 function renderReportResponse(rr, opts) {
   const { color } = opts;
-  const lines = [];
-  lines.push(`${dim("Report", color)}      ${rr.reportId}`);
-  lines.push(`${dim("Created", color)}     ${rr.createdAt}`);
-  lines.push(`${dim("Owner", color)}       ${rr.owner.source}:${rr.owner.userId}`);
-  lines.push(`${dim("Correlation", color)} ${rr.correlationId}`);
-  lines.push(`${dim("Domain", color)}      ${rr.domain}`);
-  lines.push("");
-  if (rr.status === "success" && rr.report) {
-    if (rr.overallStatus) {
-      lines.push(`${dim("Overall status", color)} ${statusColor(rr.overallStatus, color)}`);
+  const r = asRecord(rr);
+  const owner = asRecord(r["owner"]);
+  const lines = [
+    safe`${dim("Report", color)}      ${r["reportId"]}`,
+    safe`${dim("Created", color)}     ${r["createdAt"]}`,
+    safe`${dim("Owner", color)}       ${owner["source"]}:${owner["userId"]}`,
+    safe`${dim("Correlation", color)} ${r["correlationId"]}`,
+    safe`${dim("Domain", color)}      ${r["domain"]}`,
+    ""
+  ];
+  if (r["status"] === "success" && r["report"]) {
+    if (r["overallStatus"]) {
+      lines.push(safe`${dim("Overall status", color)} ${statusColor(r["overallStatus"], color)}`);
       lines.push("");
     }
-    return lines.join("\n") + renderReport(rr.report, opts);
+    return [lines.join("\n"), renderReport(r["report"], opts)].join("");
   }
-  if (rr.status === "failure" && rr.error) {
-    lines.push(`${bold2("Failure", color)}: ${rr.error.kind}: ${rr.error.message}`);
-    const cause = rr.error.cause;
-    if (cause !== null && typeof cause === "object") {
-      const causeObj = cause;
-      const causeType = causeObj["type"];
-      if (typeof causeType === "string") {
-        lines.push(`  cause: ${causeType}`);
-      }
-      for (const [k, v] of Object.entries(causeObj)) {
-        if (k === "type") continue;
-        if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
-          lines.push(`  ${k}: ${v}`);
-        }
+  if (r["status"] === "failure" && r["error"]) {
+    const error51 = asRecord(r["error"]);
+    lines.push(safe`${bold2("Failure", color)}: ${error51["kind"]}: ${error51["message"]}`);
+    const cause = asRecord(error51["cause"]);
+    if (typeof cause["type"] === "string") lines.push(safe`  cause: ${cause["type"]}`);
+    for (const [k, v] of Object.entries(cause)) {
+      if (k === "type") continue;
+      if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
+        lines.push(safe`  ${k}: ${v}`);
       }
     }
-    return lines.join("\n") + "\n";
+    return [...lines, ""].join("\n");
   }
-  return lines.join("\n") + "\n";
+  return [...lines, ""].join("\n");
 }
 
 // src/output/render-error.ts
-var import_picocolors2 = __toESM(require_picocolors(), 1);
-function red(s, color) {
-  return color ? import_picocolors2.default.red(s) : s;
-}
 function renderError(err, opts) {
   const { color } = opts;
-  if ("kind" in err && err.kind !== void 0 && !(err instanceof Error)) {
-    const cli = err;
-    if (cli.kind === "caller") {
+  const record2 = asRecord(err);
+  if (record2["kind"] !== void 0 && !(err instanceof Error)) {
+    if (record2["kind"] === "caller") {
+      const cid = record2["correlationId"];
+      const correlation = cid ? safe` (correlationId=${cid})` : "";
       const lines = [
-        `${red("Error", color)}: ${cli.code}: ${cli.message}` + (cli.correlationId ? ` (correlationId=${cli.correlationId})` : "")
+        safe`${red("Error", color)}: ${record2["code"]}: ${record2["message"]}${correlation}`
       ];
-      if (cli.fieldErrors) {
-        for (const fe of cli.fieldErrors) lines.push(`  - ${fe.path}: ${fe.message}`);
+      for (const fe of asArray(record2["fieldErrors"])) {
+        const f = asRecord(fe);
+        lines.push(safe`  - ${f["path"]}: ${f["message"]}`);
       }
-      if (cli.artifactId) lines.push(`  artifactId: ${cli.artifactId}`);
-      return lines.join("\n") + "\n";
+      if (record2["artifactId"]) lines.push(safe`  artifactId: ${record2["artifactId"]}`);
+      return [...lines, ""].join("\n");
     }
-    if (cli.kind === "server") {
-      return `${red("Server error", color)}: ${cli.code}: ${cli.message}` + (cli.correlationId ? ` (correlationId=${cli.correlationId})` : "") + "\n";
+    if (record2["kind"] === "server") {
+      const cid = record2["correlationId"];
+      const correlation = cid ? safe` (correlationId=${cid})` : "";
+      return safe`${red("Server error", color)}: ${record2["code"]}: ${record2["message"]}${correlation}\n`;
     }
-    return `${red("Network error", color)}: ${cli.cause.message}
-`;
+    return safe`${red("Network error", color)}: ${asRecord(record2["cause"])["message"]}\n`;
   }
   if (err instanceof LoadBundleError) {
     if (err.kind === "missing_bundle") {
-      return `${red("Error", color)}: ${err.message}
-`;
+      return safe`${red("Error", color)}: ${err.message}\n`;
     }
+    const causeMessage = asRecord(err.cause)["message"];
     if (err.kind === "parse_failed") {
-      const pos = err.position !== void 0 ? ` (position ${err.position})` : "";
-      return `${red("Error", color)}: failed to parse bundle JSON${pos}: ${err.cause?.message ?? ""}
-`;
+      const pos = err.position !== void 0 ? safe` (position ${err.position})` : "";
+      return safe`${red("Error", color)}: failed to parse bundle JSON${pos}: ${causeMessage}\n`;
     }
-    return `${red("Error", color)}: failed to load bundle: ${err.cause?.message ?? err.message}
-`;
+    return safe`${red("Error", color)}: failed to load bundle: ${causeMessage ?? err.message}\n`;
   }
   if (err instanceof InvalidHostError) {
     const reasonMsg = {
@@ -18604,43 +18722,40 @@ function renderError(err, opts) {
       cleartext_non_loopback: "cleartext http:// is only allowed on loopback addresses",
       userinfo_not_allowed: "URL must not contain user:password"
     }[err.reason];
-    return `${red("Error", color)}: invalid host: ${reasonMsg}
-`;
+    return safe`${red("Error", color)}: invalid host: ${reasonMsg}\n`;
   }
   if (err instanceof ResolveAuthError) {
     if (err.detail.kind === "missing_api_key") {
-      return `${red("Error", color)}: no API key configured. Run 'det auth login' or export DETERMINISTIC_API_KEY.
-`;
+      return safe`${red("Error", color)}: no API key configured. Run 'det auth login' or export DETERMINISTIC_API_KEY.\n`;
     }
     return renderError(err.detail.cause, opts);
   }
   if (err instanceof CredentialsErrorThrowable) {
     if (err.detail.kind === "lock_contended") {
-      const age = err.detail.ageMs === null ? "" : ` (held for ${Math.round(err.detail.ageMs / 1e3)}s)`;
-      return `${red("Error", color)}: another auth command is updating credentials; lock held at ${err.detail.path}${age}.
-  If no other det command is running, remove it: rm ${err.detail.path}
-`;
+      const age = err.detail.ageMs === null ? "" : safe` (held for ${Math.round(err.detail.ageMs / 1e3)}s)`;
+      return [
+        safe`${red("Error", color)}: another auth command is updating credentials; lock held at ${err.detail.path}${age}.\n`,
+        safe`  If no other det command is running, remove it: rm ${err.detail.path}\n`
+      ].join("");
     }
     if (err.detail.kind === "lock_release_failed") {
-      return `${red("Error", color)}: the credentials update completed, but its lock at ${err.detail.path} could not be removed.
-  Any credentials written by this command are saved. Remove the lock before the next auth command: rm ${err.detail.path}
-`;
+      return [
+        safe`${red("Error", color)}: the credentials update completed, but its lock at ${err.detail.path} could not be removed.\n`,
+        safe`  Any credentials written by this command are saved. Remove the lock before the next auth command: rm ${err.detail.path}\n`
+      ].join("");
     }
     const map2 = {
-      symlink_refused: `credentials file at ${err.detail.path} is a symlink; refusing to read/write`,
-      permissive_mode: `credentials file at ${err.detail.path} has overly permissive mode; run \`chmod 0600 ${err.detail.path}\``,
-      parent_symlink_refused: `credentials parent at ${err.detail.path} is a symlink; refusing`,
-      parent_not_directory: `credentials parent at ${err.detail.path} is not a directory`,
-      parent_permissive_mode: `credentials parent at ${err.detail.path} has overly permissive mode; run \`chmod 0700 ${err.detail.path}\``,
-      parse_failed: `credentials file at ${err.detail.path} is malformed JSON`,
-      io_failed: `credentials I/O failed at ${err.detail.path}`
+      symlink_refused: safe`credentials file at ${err.detail.path} is a symlink; refusing to read/write`,
+      permissive_mode: safe`credentials file at ${err.detail.path} has overly permissive mode; run \`chmod 0600 ${err.detail.path}\``,
+      parent_symlink_refused: safe`credentials parent at ${err.detail.path} is a symlink; refusing`,
+      parent_not_directory: safe`credentials parent at ${err.detail.path} is not a directory`,
+      parent_permissive_mode: safe`credentials parent at ${err.detail.path} has overly permissive mode; run \`chmod 0700 ${err.detail.path}\``,
+      parse_failed: safe`credentials file at ${err.detail.path} is malformed JSON`,
+      io_failed: safe`credentials I/O failed at ${err.detail.path}`
     };
-    return `${red("Error", color)}: ${map2[err.detail.kind] ?? err.message}
-`;
+    return safe`${red("Error", color)}: ${map2[err.detail.kind] ?? err.message}\n`;
   }
-  const fallback = err;
-  return `${red("Error", color)}: ${fallback.message ?? String(err)}
-`;
+  return safe`${red("Error", color)}: ${record2["message"]}\n`;
 }
 
 // src/output/exit-codes.ts
@@ -19477,21 +19592,6 @@ function unrecognizedCodeError(rawCode) {
     "unrecognized_error_code",
     `The server returned an unrecognized error code: ${sanitizeForTerminal(rawCode, MAX_ERROR_CODE_CHARS)}`
   );
-}
-function isForbiddenForTerminal(codeUnit) {
-  if (codeUnit < 32) return true;
-  if (codeUnit >= 127 && codeUnit <= 159) return true;
-  if (codeUnit === 1564) return true;
-  if (codeUnit === 8206 || codeUnit === 8207) return true;
-  if (codeUnit >= 8234 && codeUnit <= 8238) return true;
-  return codeUnit >= 8294 && codeUnit <= 8297;
-}
-function sanitizeForTerminal(value, maxLen) {
-  let out = "";
-  for (let i = 0; i < value.length; i += 1) {
-    if (!isForbiddenForTerminal(value.charCodeAt(i))) out += value[i];
-  }
-  return out.slice(0, maxLen);
 }
 function canonicalizeHost(host) {
   try {
