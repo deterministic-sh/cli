@@ -17049,23 +17049,26 @@ var FatigueAnalysisSchema = external_exports.object({
 }).strict();
 var CHECK_ID_REGEX = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
 var FORBIDDEN_OVERRIDE_KEY_REGEX = /^(?:__proto__|prototype|constructor)$/;
-function exceedsOverrideStructuralBound(root) {
+function inspectOverrideValue(root) {
   const stack = [{ value: root, depth: 1 }];
   let nodes = 0;
+  let nonFinite = false;
   while (stack.length > 0) {
     const { value, depth } = stack.pop();
     nodes += 1;
-    if (nodes > MAX_USER_CHECK_OVERRIDE_NODES) return "nodes";
-    if (depth > MAX_USER_CHECK_OVERRIDE_DEPTH) return "depth";
+    if (nodes > MAX_USER_CHECK_OVERRIDE_NODES) return { bound: "nodes", nonFinite };
+    if (depth > MAX_USER_CHECK_OVERRIDE_DEPTH) return { bound: "depth", nonFinite };
     if (Array.isArray(value)) {
       for (const item of value) stack.push({ value: item, depth: depth + 1 });
     } else if (value !== null && typeof value === "object") {
       for (const key of Object.getOwnPropertyNames(value)) {
         stack.push({ value: value[key], depth: depth + 1 });
       }
+    } else if (typeof value === "number" && !Number.isFinite(value)) {
+      nonFinite = true;
     }
   }
-  return null;
+  return { bound: null, nonFinite };
 }
 var UserCheckOverridesSchema = external_exports.unknown().superRefine((raw, ctx) => {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
@@ -17114,7 +17117,7 @@ var UserCheckOverridesSchema = external_exports.unknown().superRefine((raw, ctx)
         });
         continue;
       }
-      const bound = exceedsOverrideStructuralBound(innerRec[ik]);
+      const { bound, nonFinite } = inspectOverrideValue(innerRec[ik]);
       if (bound === "depth") {
         ctx.addIssue({
           code: external_exports.ZodIssueCode.custom,
@@ -17126,6 +17129,12 @@ var UserCheckOverridesSchema = external_exports.unknown().superRefine((raw, ctx)
           code: external_exports.ZodIssueCode.custom,
           path: [k, ik],
           message: `override value exceeds maximum of ${MAX_USER_CHECK_OVERRIDE_NODES} nested elements`
+        });
+      } else if (nonFinite) {
+        ctx.addIssue({
+          code: external_exports.ZodIssueCode.custom,
+          path: [k, ik],
+          message: "override values must not contain non-finite numbers (NaN, Infinity, -Infinity)"
         });
       }
     }
