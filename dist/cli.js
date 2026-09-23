@@ -16491,6 +16491,7 @@ var MAX_CLAIMED_UNITS_ENTRIES = 200;
 var MAX_SCHEMA_ENTRIES = 200;
 var MAX_USER_CHECK_OVERRIDES_CHECKS = 100;
 var MAX_USER_CHECK_OVERRIDES_KEYS_PER_CHECK = 32;
+var MAX_USER_CHECK_OVERRIDE_KEY_LEN = 128;
 var MAX_USER_CHECK_OVERRIDE_DEPTH = 32;
 var MAX_USER_CHECK_OVERRIDE_NODES = 1e4;
 var MAX_CONTEXT_PROVENANCE_LEN = 32;
@@ -17142,6 +17143,8 @@ var UserCheckOverridesSchema = external_exports.unknown().superRefine((raw, ctx)
     if (inner === null || typeof inner !== "object" || Array.isArray(inner)) continue;
     const innerRec = inner;
     const innerKeys = Object.getOwnPropertyNames(innerRec);
+    let unsafeKeyReported = false;
+    let longKeyReported = false;
     for (const ik of innerKeys) {
       if (FORBIDDEN_OVERRIDE_KEY_REGEX.test(ik)) {
         ctx.addIssue({
@@ -17149,6 +17152,28 @@ var UserCheckOverridesSchema = external_exports.unknown().superRefine((raw, ctx)
           path: [k, ik],
           message: "override keys must not be __proto__, prototype, or constructor"
         });
+        continue;
+      }
+      if (hasUnsafeTextChar(ik)) {
+        if (!unsafeKeyReported) {
+          unsafeKeyReported = true;
+          ctx.addIssue({
+            code: external_exports.ZodIssueCode.custom,
+            path: [k],
+            message: "override keys must not contain control characters"
+          });
+        }
+        continue;
+      }
+      if (ik.length > MAX_USER_CHECK_OVERRIDE_KEY_LEN) {
+        if (!longKeyReported) {
+          longKeyReported = true;
+          ctx.addIssue({
+            code: external_exports.ZodIssueCode.custom,
+            path: [k],
+            message: `override keys must be at most ${MAX_USER_CHECK_OVERRIDE_KEY_LEN} characters`
+          });
+        }
         continue;
       }
       const { bound, nonFinite } = inspectOverrideValue(innerRec[ik]);
@@ -17310,8 +17335,10 @@ var CheckResultBaseSchema = external_exports.object({
   // step (issue #293). Empty on `not_run` checks (planner never reached the
   // merge step). Telemetry filters on `status !== 'not_run'` to detect
   // attempted forgery. Defaults to [] at parse time so the public report
-  // contract is "always present, default empty".
-  rejected_user_overrides: external_exports.array(external_exports.string()).default([]),
+  // contract is "always present, default empty". Items are capped at
+  // MAX_USER_CHECK_OVERRIDE_KEY_LEN (issue 1503) — the same cap the wire schema
+  // enforces on the keys they echo, so the public JSON Schema advertises the bound.
+  rejected_user_overrides: external_exports.array(external_exports.string().max(MAX_USER_CHECK_OVERRIDE_KEY_LEN)).default([]),
   // Additive report audit trail (issue #1032): per evidence requirement,
   // exactly which artifacts the planner PROVIDED to the handler and which
   // routing mode selected them. Populated by execute.ts from the plan's
