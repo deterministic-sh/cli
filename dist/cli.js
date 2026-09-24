@@ -18899,7 +18899,7 @@ var sample_bundle_default = {
     },
     {
       id: "analytical-reference",
-      kind: "reference",
+      kind: "table",
       role: "reference",
       schema: {
         r_m: {
@@ -18907,7 +18907,7 @@ var sample_bundle_default = {
           role: "length",
           type: "number"
         },
-        u_ms_analytical: {
+        u_ms: {
           description: "analytical axial velocity (m/s)",
           role: "velocity",
           type: "number"
@@ -18916,47 +18916,47 @@ var sample_bundle_default = {
       value: [
         {
           r_m: 0,
-          u_ms_analytical: 2.5
+          u_ms: 2.5
         },
         {
           r_m: 1e-3,
-          u_ms_analytical: 2.475
+          u_ms: 2.475
         },
         {
           r_m: 2e-3,
-          u_ms_analytical: 2.4
+          u_ms: 2.4
         },
         {
           r_m: 3e-3,
-          u_ms_analytical: 2.275
+          u_ms: 2.275
         },
         {
           r_m: 4e-3,
-          u_ms_analytical: 2.1
+          u_ms: 2.1
         },
         {
           r_m: 5e-3,
-          u_ms_analytical: 1.875
+          u_ms: 1.875
         },
         {
           r_m: 6e-3,
-          u_ms_analytical: 1.6
+          u_ms: 1.6
         },
         {
           r_m: 7e-3,
-          u_ms_analytical: 1.275
+          u_ms: 1.275
         },
         {
           r_m: 8e-3,
-          u_ms_analytical: 0.9
+          u_ms: 0.9
         },
         {
           r_m: 9e-3,
-          u_ms_analytical: 0.475
+          u_ms: 0.475
         },
         {
           r_m: 0.01,
-          u_ms_analytical: 0
+          u_ms: 0
         }
       ]
     }
@@ -18985,11 +18985,27 @@ var sample_bundle_default = {
       kind: "temporal",
       subject: "Did the run converge to a stable, bounded solution?",
       expectation: "Residuals and the response trend toward a bounded, smoothly converged state."
+    },
+    {
+      id: "matches-analytical-reference",
+      kind: "comparative",
+      subject: "Does the computed velocity profile agree with the closed-form Poiseuille solution?",
+      expectation: "Across the supplied radial stations, the axial-velocity RMSE and absolute mean signed error against the analytical reference remain within the declared tolerances."
     }
   ],
   customer_questions: [
     "Does the computed velocity profile agree with the closed-form Poiseuille solution?"
-  ]
+  ],
+  user_check_overrides: {
+    "comparative.benchmark_delta": {
+      benchmark_field: "u_ms",
+      benchmark_tolerance: 0.05
+    },
+    "comparative.benchmark_bias": {
+      benchmark_field: "u_ms",
+      bias_tolerance: 0.02
+    }
+  }
 };
 
 // src/commands/validate.ts
