@@ -16210,7 +16210,13 @@ var PHYSICAL_DIMENSIONS = [
   "strain",
   "stress",
   "cycle_count",
-  "stress_amplitude"
+  "stress_amplitude",
+  "dynamic_viscosity",
+  "thermal_conductivity",
+  "specific_heat",
+  "reynolds_number",
+  "prandtl_number",
+  "mach_number"
 ];
 function buildDimensionRules(entries, poisonKeys = []) {
   const exact = /* @__PURE__ */ new Map();
@@ -16228,6 +16234,10 @@ var LBF_NEWTONS = 4.4482216152605;
 var IN_METERS = 0.0254;
 var FT_METERS = 0.3048;
 var PSI_PASCALS = 6894.757293168361;
+var DIMENSIONLESS_GROUP_RULES = buildDimensionRules([
+  { key: "dimensionless", rule: { factor: 1, normalized_unit: "dimensionless" }, foldSafe: true },
+  { key: "1", rule: { factor: 1, normalized_unit: "dimensionless" }, foldSafe: true }
+]);
 var RULES = {
   density: buildDimensionRules([
     { key: "kg/m3", rule: { factor: 1, normalized_unit: "kg/m^3" }, foldSafe: true },
@@ -16383,7 +16393,35 @@ var RULES = {
       { key: "ksi", rule: { factor: PSI_PASCALS * 1e3, normalized_unit: "Pa" }, foldSafe: true }
     ],
     ["mpa"]
-  )
+  ),
+  // #1531 transport properties. The milli-prefixed keys stay fold-safe (the
+  // `mm`/`ms` precedent): lookupRule's leading-`m` case-flip guard rejects
+  // `MPa*s` / `MW/(m*K)` rather than resolving them at the milli scale.
+  // `P`/`cP` fold to `p`/`cp`, which no other key of this dimension claims.
+  dynamic_viscosity: buildDimensionRules([
+    { key: "Pa*s", rule: { factor: 1, normalized_unit: "Pa*s" }, foldSafe: true },
+    { key: "mPa*s", rule: { factor: 1e-3, normalized_unit: "Pa*s" }, foldSafe: true },
+    { key: "cP", rule: { factor: 1e-3, normalized_unit: "Pa*s" }, foldSafe: true },
+    { key: "P", rule: { factor: 0.1, normalized_unit: "Pa*s" }, foldSafe: true }
+  ]),
+  thermal_conductivity: buildDimensionRules([
+    { key: "W/(m*K)", rule: { factor: 1, normalized_unit: "W/(m*K)" }, foldSafe: true },
+    { key: "W/m/K", rule: { factor: 1, normalized_unit: "W/(m*K)" }, foldSafe: true },
+    { key: "mW/(m*K)", rule: { factor: 1e-3, normalized_unit: "W/(m*K)" }, foldSafe: true },
+    { key: "mW/m/K", rule: { factor: 1e-3, normalized_unit: "W/(m*K)" }, foldSafe: true }
+  ]),
+  specific_heat: buildDimensionRules([
+    { key: "J/(kg*K)", rule: { factor: 1, normalized_unit: "J/(kg*K)" }, foldSafe: true },
+    { key: "J/kg/K", rule: { factor: 1, normalized_unit: "J/(kg*K)" }, foldSafe: true },
+    { key: "kJ/(kg*K)", rule: { factor: 1e3, normalized_unit: "J/(kg*K)" }, foldSafe: true },
+    { key: "kJ/kg/K", rule: { factor: 1e3, normalized_unit: "J/(kg*K)" }, foldSafe: true }
+  ]),
+  // #1531 dimensionless groups: identity only. No `%` key on purpose — the
+  // parser maps `%` to the zero vector, so this table is where a percent
+  // Reynolds/Prandtl/Mach claim is rejected.
+  reynolds_number: DIMENSIONLESS_GROUP_RULES,
+  prandtl_number: DIMENSIONLESS_GROUP_RULES,
+  mach_number: DIMENSIONLESS_GROUP_RULES
 };
 var CANONICAL_DIMENSION_UNITS = {
   density: "kg/m^3",
@@ -16404,7 +16442,13 @@ var CANONICAL_DIMENSION_UNITS = {
   strain: "dimensionless",
   stress: "Pa",
   cycle_count: "dimensionless",
-  stress_amplitude: "Pa"
+  stress_amplitude: "Pa",
+  dynamic_viscosity: "Pa*s",
+  thermal_conductivity: "W/(m*K)",
+  specific_heat: "J/(kg*K)",
+  reynolds_number: "dimensionless",
+  prandtl_number: "dimensionless",
+  mach_number: "dimensionless"
 };
 function buildCanonicalUnitToDimension(forward, precedence) {
   const claimants = /* @__PURE__ */ new Map();
