@@ -16348,18 +16348,24 @@ var RULES = {
     ["mpa"]
   ),
   // #1177 S17 binding: fatigue rainflow-histogram bin count. Dimensionless
-  // (zero SI vector) — 'cycles'/'count'/'1' are synonyms with an identity
-  // conversion (factor 1); fractional values are legal (weighted rainflow
-  // counts). normalized_unit is 'dimensionless' (not a distinct 'cycles'
-  // canonical string) specifically so `CANONICAL_DIMENSION_UNITS.cycle_count`
-  // reuses `strain`'s already-registered zero-vector literal in
-  // `kernels/dimensions.ts` (parseUnitDimension special-cases the string
-  // 'dimensionless' — see that module's header) rather than requiring a new
-  // literal there. The resulting canonical-unit collision with `strain` is
+  // (zero SI vector) — 'dimensionless'/'cycles'/'count'/'1' are synonyms with
+  // an identity conversion (factor 1); fractional values are legal (weighted
+  // rainflow counts). normalized_unit is 'dimensionless' (not a distinct
+  // 'cycles' canonical string) specifically so
+  // `CANONICAL_DIMENSION_UNITS.cycle_count` reuses `strain`'s
+  // already-registered zero-vector literal in `kernels/dimensions.ts`
+  // (parseUnitDimension special-cases the string 'dimensionless' — see that
+  // module's header) rather than requiring a new literal there. The canonical
+  // string is itself a registered key (issue 1523) so a role-declared path —
+  // a T10 `expected_ranges` entry, a declaration-coherence gate — can spell
+  // the role's own canonical unit without tripping `UnitNormalizationError`;
+  // every dimension's canonical unit is accepted for that dimension, pinned
+  // in units.test.ts. The resulting canonical-unit collision with `strain` is
   // resolved by the `dimensionless -> strain` precedence entry below (the
   // `Pa -> pressure` D3 precedent) — legacy strain fallback resolution is
   // unaffected; cycle_count is always role-declared, never inferred.
   cycle_count: buildDimensionRules([
+    { key: "dimensionless", rule: { factor: 1, normalized_unit: "dimensionless" }, foldSafe: true },
     { key: "cycles", rule: { factor: 1, normalized_unit: "dimensionless" }, foldSafe: true },
     { key: "count", rule: { factor: 1, normalized_unit: "dimensionless" }, foldSafe: true },
     { key: "1", rule: { factor: 1, normalized_unit: "dimensionless" }, foldSafe: true }
