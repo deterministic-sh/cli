@@ -21317,7 +21317,10 @@ var PROVENANCE_TAGS = [
   "registry_lookup",
   "caller_explicit",
   "llm_normalized",
-  "llm_inferred"
+  "llm_inferred",
+  // Assigned only by the planner from `RunValidationOptions.approvedRequirements`;
+  // never caller-declarable. Deliberately not verdict-capped (spec 1844).
+  "approved_requirement"
 ];
 var ProvenanceTagSchema = external_exports.enum(PROVENANCE_TAGS);
 var UNCERTAIN_REASONS = [
@@ -22676,8 +22679,84 @@ var RecommendationSchema = external_exports.object({
   escalation_triggers: external_exports.array(external_exports.string())
 });
 
+// ../validation-engine/src/profile.ts
+var PROFILE_FORMAT = "1";
+var PROFILE_STATES = ["active", "deprecated", "withdrawn"];
+var MAX_REQUIRED_CHECKS = 256;
+var MAX_ANY_OF_GROUPS = 64;
+var MAX_ANY_OF_MEMBERS = 64;
+var MAX_REQUIRED_EVIDENCE = 64;
+var MAX_CONDITION_VALUES = 64;
+var MAX_PERMITTED_EXCLUSIONS = 8;
+var MAX_NAME_LEN = 120;
+var NameSchema = external_exports.string().min(1).max(MAX_NAME_LEN);
+var ProfileIdSchema = external_exports.string().regex(/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/).max(MAX_NAME_LEN);
+var SemverSchema = external_exports.string().regex(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/).max(32);
+var MemberRefSchema = external_exports.strictObject({ domain: NameSchema, id: NameSchema });
+var RequiredCheckSchema = external_exports.strictObject({
+  domain: NameSchema,
+  id: NameSchema,
+  permitted_exclusions: external_exports.array(external_exports.enum(["engine_not_applicable"])).max(MAX_PERMITTED_EXCLUSIONS).default([])
+});
+var RequiredEvidenceSchema = external_exports.strictObject({
+  purpose: EvidencePurposeSchema,
+  kind: EvidenceKindSchema.optional(),
+  role: ArtifactRoleSchema.optional()
+});
+var ApplicabilityConditionSchema = external_exports.strictObject({
+  field: external_exports.enum(["context.scenario", "context.method", "context.operating_regime"]),
+  in: external_exports.array(NameSchema).min(1).max(MAX_CONDITION_VALUES)
+});
+var ReviewProfileSchema = external_exports.strictObject({
+  profile_format: external_exports.literal(PROFILE_FORMAT),
+  profile_id: ProfileIdSchema,
+  version: SemverSchema,
+  title: external_exports.string().min(1).max(MAX_NAME_LEN),
+  summary: external_exports.string().min(1).max(600),
+  domain: NameSchema,
+  applies_when: external_exports.array(ApplicabilityConditionSchema).max(3).default([]),
+  requirements: external_exports.strictObject({
+    checks: external_exports.array(RequiredCheckSchema).min(1).max(MAX_REQUIRED_CHECKS),
+    any_of: external_exports.array(
+      external_exports.strictObject({
+        label: NameSchema,
+        members: external_exports.array(MemberRefSchema).min(2).max(MAX_ANY_OF_MEMBERS)
+      })
+    ).max(MAX_ANY_OF_GROUPS).default([]),
+    evidence: external_exports.array(RequiredEvidenceSchema).max(MAX_REQUIRED_EVIDENCE).default([])
+  })
+});
+var DigestHexSchema = external_exports.string().regex(/^[0-9a-f]{64}$/);
+var ProfileRegistrySchema = external_exports.strictObject({
+  registry_version: external_exports.literal(1),
+  profiles: external_exports.array(
+    external_exports.strictObject({
+      profile_id: ProfileIdSchema,
+      version: SemverSchema,
+      digest: DigestHexSchema,
+      state: external_exports.enum(PROFILE_STATES),
+      superseded_by: SemverSchema.nullable()
+    })
+  ).max(4096)
+});
+var ProfileDigestSchema = external_exports.strictObject({
+  algorithm: external_exports.literal("sha256"),
+  value: DigestHexSchema
+});
+
 // ../validation-engine/src/provenance.ts
 var ProvenanceBlockSchema = external_exports.record(external_exports.string(), ProvenanceTagSchema);
+var RequirementSetIdSchema = external_exports.string().regex(/^rqs_[0-9A-HJKMNP-TV-Z]{26}$/);
+var ApprovedRequirementRefSchema = external_exports.strictObject({
+  set_id: RequirementSetIdSchema,
+  revision: external_exports.number().int().min(1),
+  digest: ProfileDigestSchema,
+  approved_at: external_exports.iso.datetime(),
+  expires_at: external_exports.iso.datetime()
+});
+var ApprovedRequirementsEchoSchema = ApprovedRequirementRefSchema.extend({
+  rejected_overrides: external_exports.array(external_exports.strictObject({ check_id: external_exports.string(), parameter_key: external_exports.string() }))
+});
 
 // ../validation-engine/src/report.ts
 var CategoryCoverageSchema = external_exports.object({
@@ -22730,7 +22809,10 @@ var ValidationReportSchema = external_exports.object({
   // #1033: echoed verbatim from `request.run_manifest` by `assembleReport` —
   // pure pass-through, no derivation. Optional/additive; absent on a
   // manifest-less request's report.
-  run_manifest: RunManifestSchema.optional()
+  run_manifest: RunManifestSchema.optional(),
+  // Spec 1844: the approved-requirement revision the run used, plus the caller
+  // overrides it governed away. Absent when no revision governed the run.
+  approved_requirements: ApprovedRequirementsEchoSchema.optional()
 });
 
 // src/contract/schemas.ts
@@ -22939,7 +23021,7 @@ var OVERRIDES = [
   { flag: "time-basis", wirePath: ["context", "time_basis"] },
   { flag: "agent-id", wirePath: ["agent_id"] }
 ];
-function isPlainObject2(v) {
+function isPlainObject3(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 function setPath(obj, path4, value) {
@@ -22949,7 +23031,7 @@ function setPath(obj, path4, value) {
     const seg = path4[i];
     if (seg === void 0) return;
     const next = cur[seg];
-    if (isPlainObject2(next)) {
+    if (isPlainObject3(next)) {
       cur[seg] = { ...next };
     } else {
       cur[seg] = {};
@@ -22960,7 +23042,7 @@ function setPath(obj, path4, value) {
   if (last !== void 0) cur[last] = value;
 }
 function mergeFlags(bundle, flags) {
-  const base = isPlainObject2(bundle) ? structuredClone(bundle) : {};
+  const base = isPlainObject3(bundle) ? structuredClone(bundle) : {};
   const applied = [];
   for (const target of OVERRIDES) {
     const value = flags[target.flag];
