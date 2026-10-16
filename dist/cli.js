@@ -22172,6 +22172,85 @@ function validateRunManifestCrossReferences(manifest, evidence, ctx) {
   }
 }
 
+// ../validation-engine/src/profile.ts
+var PROFILE_FORMAT = "1";
+var PROFILE_STATES = ["active", "deprecated", "withdrawn"];
+var MAX_REQUIRED_CHECKS = 256;
+var MAX_ANY_OF_GROUPS = 64;
+var MAX_ANY_OF_MEMBERS = 64;
+var MAX_REQUIRED_EVIDENCE = 64;
+var MAX_CONDITION_VALUES = 64;
+var MAX_PERMITTED_EXCLUSIONS = 8;
+var MAX_NAME_LEN = 120;
+var NameSchema = external_exports.string().min(1).max(MAX_NAME_LEN);
+var ProfileIdSchema = external_exports.string().regex(/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/).max(MAX_NAME_LEN);
+var SemverSchema = external_exports.string().regex(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/).max(32);
+var MemberRefSchema = external_exports.strictObject({ domain: NameSchema, id: NameSchema });
+var RequiredCheckSchema = external_exports.strictObject({
+  domain: NameSchema,
+  id: NameSchema,
+  permitted_exclusions: external_exports.array(external_exports.enum(["engine_not_applicable"])).max(MAX_PERMITTED_EXCLUSIONS).default([])
+});
+var RequiredEvidenceSchema = external_exports.strictObject({
+  purpose: EvidencePurposeSchema,
+  kind: EvidenceKindSchema.optional(),
+  role: ArtifactRoleSchema.optional()
+});
+var ApplicabilityConditionSchema = external_exports.strictObject({
+  field: external_exports.enum(["context.scenario", "context.method", "context.operating_regime"]),
+  in: external_exports.array(NameSchema).min(1).max(MAX_CONDITION_VALUES)
+});
+var ReviewProfileSchema = external_exports.strictObject({
+  profile_format: external_exports.literal(PROFILE_FORMAT),
+  profile_id: ProfileIdSchema,
+  version: SemverSchema,
+  title: external_exports.string().min(1).max(MAX_NAME_LEN),
+  summary: external_exports.string().min(1).max(600),
+  domain: NameSchema,
+  applies_when: external_exports.array(ApplicabilityConditionSchema).max(3).default([]),
+  requirements: external_exports.strictObject({
+    checks: external_exports.array(RequiredCheckSchema).min(1).max(MAX_REQUIRED_CHECKS),
+    any_of: external_exports.array(
+      external_exports.strictObject({
+        label: NameSchema,
+        members: external_exports.array(MemberRefSchema).min(2).max(MAX_ANY_OF_MEMBERS)
+      })
+    ).max(MAX_ANY_OF_GROUPS).default([]),
+    evidence: external_exports.array(RequiredEvidenceSchema).max(MAX_REQUIRED_EVIDENCE).default([])
+  })
+});
+var DigestHexSchema = external_exports.string().regex(/^[0-9a-f]{64}$/);
+var ProfileRegistrySchema = external_exports.strictObject({
+  registry_version: external_exports.literal(1),
+  profiles: external_exports.array(
+    external_exports.strictObject({
+      profile_id: ProfileIdSchema,
+      version: SemverSchema,
+      digest: DigestHexSchema,
+      state: external_exports.enum(PROFILE_STATES),
+      superseded_by: SemverSchema.nullable()
+    })
+  ).max(4096)
+});
+var ProfileDigestSchema = external_exports.strictObject({
+  algorithm: external_exports.literal("sha256"),
+  value: DigestHexSchema
+});
+
+// ../validation-engine/src/provenance.ts
+var ProvenanceBlockSchema = external_exports.record(external_exports.string(), ProvenanceTagSchema);
+var RequirementSetIdSchema = external_exports.string().regex(/^rqs_[0-9A-HJKMNP-TV-Z]{26}$/);
+var ApprovedRequirementRefSchema = external_exports.strictObject({
+  set_id: RequirementSetIdSchema,
+  revision: external_exports.number().int().min(1),
+  digest: ProfileDigestSchema,
+  approved_at: external_exports.iso.datetime(),
+  expires_at: external_exports.iso.datetime()
+});
+var ApprovedRequirementsEchoSchema = ApprovedRequirementRefSchema.extend({
+  rejected_overrides: external_exports.array(external_exports.strictObject({ check_id: external_exports.string(), parameter_key: external_exports.string() }))
+});
+
 // ../validation-engine/src/request.ts
 var FLUID_ID_REGEX = /^[a-z0-9_:-]{1,64}$/;
 var CANONICAL_ID_JSON_SCHEMA_META = {
@@ -22551,6 +22630,12 @@ var ValidationRequestSchema = external_exports.object({
   claims: external_exports.array(ClaimInputSchema).max(MAX_CLAIMS_LEN).default([]),
   customer_questions: external_exports.array(external_exports.string().max(MAX_QUESTION_LEN)).max(MAX_QUESTIONS_LEN).default([]),
   user_check_overrides: UserCheckOverridesSchema.optional(),
+  // Issue 1857 (R02 §6.1): the reference to a server-stored approved
+  // requirement revision. The reference only — never a digest, a value or an
+  // approval flag; strict, so `{ set_id, revision, approved: true }` is a
+  // schema error rather than a stripped key. Resolved in the transport
+  // (apps/web), never by the engine.
+  approved_requirements: external_exports.strictObject({ set_id: RequirementSetIdSchema, revision: external_exports.number().int().positive() }).optional(),
   // #689: optional caller-supplied opaque agent label. Log-safe charset
   // (AGENT_ID_PATTERN excludes control/space/quote/unicode) + ≤128. Case-preserving
   // (the caller's exact label — no trim/lowercase, unlike fluid_id).
@@ -22679,85 +22764,6 @@ var RecommendationSchema = external_exports.object({
   escalation_triggers: external_exports.array(external_exports.string())
 });
 
-// ../validation-engine/src/profile.ts
-var PROFILE_FORMAT = "1";
-var PROFILE_STATES = ["active", "deprecated", "withdrawn"];
-var MAX_REQUIRED_CHECKS = 256;
-var MAX_ANY_OF_GROUPS = 64;
-var MAX_ANY_OF_MEMBERS = 64;
-var MAX_REQUIRED_EVIDENCE = 64;
-var MAX_CONDITION_VALUES = 64;
-var MAX_PERMITTED_EXCLUSIONS = 8;
-var MAX_NAME_LEN = 120;
-var NameSchema = external_exports.string().min(1).max(MAX_NAME_LEN);
-var ProfileIdSchema = external_exports.string().regex(/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/).max(MAX_NAME_LEN);
-var SemverSchema = external_exports.string().regex(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/).max(32);
-var MemberRefSchema = external_exports.strictObject({ domain: NameSchema, id: NameSchema });
-var RequiredCheckSchema = external_exports.strictObject({
-  domain: NameSchema,
-  id: NameSchema,
-  permitted_exclusions: external_exports.array(external_exports.enum(["engine_not_applicable"])).max(MAX_PERMITTED_EXCLUSIONS).default([])
-});
-var RequiredEvidenceSchema = external_exports.strictObject({
-  purpose: EvidencePurposeSchema,
-  kind: EvidenceKindSchema.optional(),
-  role: ArtifactRoleSchema.optional()
-});
-var ApplicabilityConditionSchema = external_exports.strictObject({
-  field: external_exports.enum(["context.scenario", "context.method", "context.operating_regime"]),
-  in: external_exports.array(NameSchema).min(1).max(MAX_CONDITION_VALUES)
-});
-var ReviewProfileSchema = external_exports.strictObject({
-  profile_format: external_exports.literal(PROFILE_FORMAT),
-  profile_id: ProfileIdSchema,
-  version: SemverSchema,
-  title: external_exports.string().min(1).max(MAX_NAME_LEN),
-  summary: external_exports.string().min(1).max(600),
-  domain: NameSchema,
-  applies_when: external_exports.array(ApplicabilityConditionSchema).max(3).default([]),
-  requirements: external_exports.strictObject({
-    checks: external_exports.array(RequiredCheckSchema).min(1).max(MAX_REQUIRED_CHECKS),
-    any_of: external_exports.array(
-      external_exports.strictObject({
-        label: NameSchema,
-        members: external_exports.array(MemberRefSchema).min(2).max(MAX_ANY_OF_MEMBERS)
-      })
-    ).max(MAX_ANY_OF_GROUPS).default([]),
-    evidence: external_exports.array(RequiredEvidenceSchema).max(MAX_REQUIRED_EVIDENCE).default([])
-  })
-});
-var DigestHexSchema = external_exports.string().regex(/^[0-9a-f]{64}$/);
-var ProfileRegistrySchema = external_exports.strictObject({
-  registry_version: external_exports.literal(1),
-  profiles: external_exports.array(
-    external_exports.strictObject({
-      profile_id: ProfileIdSchema,
-      version: SemverSchema,
-      digest: DigestHexSchema,
-      state: external_exports.enum(PROFILE_STATES),
-      superseded_by: SemverSchema.nullable()
-    })
-  ).max(4096)
-});
-var ProfileDigestSchema = external_exports.strictObject({
-  algorithm: external_exports.literal("sha256"),
-  value: DigestHexSchema
-});
-
-// ../validation-engine/src/provenance.ts
-var ProvenanceBlockSchema = external_exports.record(external_exports.string(), ProvenanceTagSchema);
-var RequirementSetIdSchema = external_exports.string().regex(/^rqs_[0-9A-HJKMNP-TV-Z]{26}$/);
-var ApprovedRequirementRefSchema = external_exports.strictObject({
-  set_id: RequirementSetIdSchema,
-  revision: external_exports.number().int().min(1),
-  digest: ProfileDigestSchema,
-  approved_at: external_exports.iso.datetime(),
-  expires_at: external_exports.iso.datetime()
-});
-var ApprovedRequirementsEchoSchema = ApprovedRequirementRefSchema.extend({
-  rejected_overrides: external_exports.array(external_exports.strictObject({ check_id: external_exports.string(), parameter_key: external_exports.string() }))
-});
-
 // ../validation-engine/src/report.ts
 var CategoryCoverageSchema = external_exports.object({
   run: external_exports.number(),
@@ -22815,6 +22821,68 @@ var ValidationReportSchema = external_exports.object({
   approved_requirements: ApprovedRequirementsEchoSchema.optional()
 });
 
+// ../validation-engine/src/requirements.ts
+var REQUIREMENT_FORMAT = "1";
+var REQUIREMENT_USE_REFUSALS = [
+  "requirement_set_not_found",
+  "requirement_revision_not_found",
+  "requirement_revision_not_approved",
+  "requirement_revision_superseded",
+  "requirement_revision_withdrawn",
+  "requirement_revision_not_yet_valid",
+  "requirement_revision_expired",
+  "requirement_domain_mismatch",
+  "requirement_profile_mismatch",
+  "requirement_not_applicable",
+  "requirement_applicability_untrusted",
+  "requirement_revision_incompatible",
+  "requirement_digest_mismatch"
+];
+var MAX_LIMITS = 64;
+var MAX_CONDITION_VALUES2 = 64;
+var RequirementApplicabilitySchema = external_exports.strictObject({
+  field: external_exports.enum([
+    "context.scenario",
+    "context.method",
+    "context.operating_regime",
+    "context.material_id"
+  ]),
+  in: external_exports.array(external_exports.string().min(1).max(120)).min(1).max(MAX_CONDITION_VALUES2)
+});
+var LimitValueSchema = external_exports.unknown().superRefine((value, ctx) => {
+  const { bound } = inspectOverrideValue(value);
+  if (bound !== null)
+    ctx.addIssue({ code: "custom", message: `limit value exceeds the ${bound} bound` });
+});
+var RequirementRevisionSchema = external_exports.strictObject({
+  requirement_format: external_exports.literal(REQUIREMENT_FORMAT),
+  title: external_exports.string().min(1).max(120),
+  domain: external_exports.string(),
+  source: external_exports.strictObject({
+    kind: external_exports.enum([
+      "customer_document",
+      "published_standard",
+      "manufacturer_instructions",
+      "internal_procedure"
+    ]),
+    reference: external_exports.string().min(1).max(200),
+    revision: external_exports.string().min(1).max(40)
+  }),
+  binding: external_exports.strictObject({
+    review_profiles: external_exports.array(external_exports.strictObject({ id: ProfileIdSchema, version: SemverSchema })).default([])
+  }).default({ review_profiles: [] }),
+  applies_when: external_exports.array(RequirementApplicabilitySchema).default([]),
+  limits: external_exports.array(
+    external_exports.strictObject({
+      // Same key cap as `user_check_overrides` keys.
+      check_id: external_exports.string().max(MAX_USER_CHECK_OVERRIDE_KEY_LEN),
+      parameter_key: external_exports.string().max(MAX_USER_CHECK_OVERRIDE_KEY_LEN),
+      value: LimitValueSchema,
+      note: external_exports.string().max(200).optional()
+    })
+  ).min(1).max(MAX_LIMITS)
+});
+
 // src/contract/schemas.ts
 var ValidateResponseWrapperSchema = external_exports.object({
   reportId: external_exports.string(),
@@ -22833,7 +22901,9 @@ var ErrorEnvelopeBodySchema = external_exports.object({
     // #421 — dashboard surface unified 401 envelope
     "rate_limited",
     // #421 — dashboard surface per-owner rate limit
-    "internal"
+    "internal",
+    // Validate-time approved-requirement refusals (spec 1857 §6.3): 404/409/422 caller-class and the 500-class digest mismatch.
+    ...REQUIREMENT_USE_REFUSALS
   ]),
   message: external_exports.string(),
   correlationId: external_exports.string().optional(),
