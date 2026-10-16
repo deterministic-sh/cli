@@ -22903,7 +22903,11 @@ var ErrorEnvelopeBodySchema = external_exports.object({
     // #421 — dashboard surface per-owner rate limit
     "internal",
     // Validate-time approved-requirement refusals (spec 1857 §6.3): 404/409/422 caller-class and the 500-class digest mismatch.
-    ...REQUIREMENT_USE_REFUSALS
+    ...REQUIREMENT_USE_REFUSALS,
+    // Approved-requirement agent transport refusals (spec 1858 §5): 422, 422 and 409.
+    "invalid_revision",
+    "domain_mismatch",
+    "state_conflict"
   ]),
   message: external_exports.string(),
   correlationId: external_exports.string().optional(),
@@ -22970,6 +22974,40 @@ var ReportSummaryEntrySchema = external_exports.object({
 var ReportsListResponseSchema = external_exports.object({
   reports: external_exports.array(ReportSummaryEntrySchema),
   nextCursor: external_exports.string().nullable()
+}).strict();
+var RequirementSetCreateRequestSchema = external_exports.object({ domain: external_exports.string(), title: external_exports.string().min(1).max(120) }).strict();
+var RequirementDraftCreateRequestSchema = external_exports.object({ content: RequirementRevisionSchema }).strict();
+var Iso = external_exports.string();
+var DigestHex = external_exports.string().regex(/^[0-9a-f]{64}$/);
+var RequirementRevisionSummarySchema = external_exports.object({
+  revision: external_exports.number().int().min(1),
+  state: external_exports.enum(["draft", "approved", "superseded", "withdrawn", "discarded"]),
+  digest: DigestHex,
+  created_at: Iso,
+  approved_at: Iso.nullable(),
+  expires_at: Iso.nullable(),
+  withdrawn_at: Iso.nullable(),
+  withdrawal_reason: external_exports.string().nullable()
+}).strict();
+var RequirementSetSummarySchema = external_exports.object({
+  set_id: RequirementSetIdSchema,
+  domain: external_exports.string(),
+  title: external_exports.string(),
+  created_at: Iso,
+  next_revision: external_exports.number().int().min(1),
+  approval_high_water: external_exports.number().int().min(0),
+  effective: RequirementRevisionSummarySchema.nullable()
+}).strict();
+var RequirementSetCreatedSchema = external_exports.object({ ok: external_exports.literal(true), set_id: RequirementSetIdSchema }).strict();
+var RequirementDraftCreatedSchema = external_exports.object({ ok: external_exports.literal(true), revision: external_exports.number().int().min(1), digest: DigestHex }).strict();
+var RequirementDiscardedSchema = external_exports.object({ ok: external_exports.literal(true) }).strict();
+var RequirementSetListSchema = external_exports.object({ sets: external_exports.array(RequirementSetSummarySchema), next_cursor: external_exports.string().nullable() }).strict();
+var RequirementRevisionListSchema = external_exports.object({
+  revisions: external_exports.array(RequirementRevisionSummarySchema),
+  next_cursor: external_exports.string().nullable()
+}).strict();
+var RequirementRevisionSchema2 = RequirementRevisionSummarySchema.extend({
+  content: RequirementRevisionSchema
 }).strict();
 
 // src/client/errors.ts
