@@ -22680,6 +22680,15 @@ var ValidationRequestSchema = external_exports.object({
   // schema error rather than a stripped key. Resolved in the transport
   // (apps/web), never by the engine.
   approved_requirements: external_exports.strictObject({ set_id: RequirementSetIdSchema, revision: external_exports.number().int().positive() }).optional(),
+  // Spec 1876 §3.1 (spec 1828 §6.1): the review profile the run is judged
+  // against. Resolved in the transport (apps/web), never by the engine; no
+  // digest on the request.
+  review_profile: external_exports.strictObject({
+    id: ProfileIdSchema,
+    // Optional on the wire only so the transport can refuse an omission
+    // with `profile_version_required` instead of a generic schema error.
+    version: SemverSchema.optional()
+  }).optional(),
   // #689: optional caller-supplied opaque agent label. Log-safe charset
   // (AGENT_ID_PATTERN excludes control/space/quote/unicode) + ≤128. Case-preserving
   // (the caller's exact label — no trim/lowercase, unlike fluid_id).
@@ -22862,7 +22871,12 @@ var ValidationReportSchema = external_exports.object({
   run_manifest: RunManifestSchema.optional(),
   // Spec 1844: the approved-requirement revision the run used, plus the caller
   // overrides it governed away. Absent when no revision governed the run.
-  approved_requirements: ApprovedRequirementsEchoSchema.optional()
+  approved_requirements: ApprovedRequirementsEchoSchema.optional(),
+  // Spec 1876 §3.2: the resolved review profile's identity and its completion
+  // evaluation over `checks`. Both present iff the transport resolved a
+  // profile; `recommendation` is unaffected.
+  review_profile: external_exports.strictObject({ id: ProfileIdSchema, version: SemverSchema, digest: ProfileDigestSchema }).optional(),
+  profile_completion: ProfileCompletionSchema.optional()
 });
 
 // ../validation-engine/src/requirements.ts
