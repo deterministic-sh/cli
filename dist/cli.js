@@ -22175,6 +22175,7 @@ function validateRunManifestCrossReferences(manifest, evidence, ctx) {
 // ../validation-engine/src/profile.ts
 var PROFILE_FORMAT = "1";
 var PROFILE_STATES = ["active", "deprecated", "withdrawn"];
+var PROFILE_COMPLETION_STATES = ["complete", "incomplete", "not_applicable"];
 var MAX_REQUIRED_CHECKS = 256;
 var MAX_ANY_OF_GROUPS = 64;
 var MAX_ANY_OF_MEMBERS = 64;
@@ -22235,6 +22236,49 @@ var ProfileRegistrySchema = external_exports.strictObject({
 var ProfileDigestSchema = external_exports.strictObject({
   algorithm: external_exports.literal("sha256"),
   value: DigestHexSchema
+});
+var PROFILE_ITEM_STATES = [
+  "satisfied",
+  "failed",
+  "unresolved",
+  "excluded",
+  "missing"
+];
+var PROFILE_NOTICES = ["deprecated_profile"];
+var ItemStateSchema = external_exports.enum(PROFILE_ITEM_STATES);
+var ProfileCompletionSchema = external_exports.strictObject({
+  profile: external_exports.strictObject({
+    id: ProfileIdSchema,
+    version: SemverSchema,
+    digest: ProfileDigestSchema
+  }),
+  state: external_exports.enum(PROFILE_COMPLETION_STATES),
+  checks: external_exports.array(
+    external_exports.strictObject({
+      domain: NameSchema,
+      id: NameSchema,
+      state: ItemStateSchema,
+      source_status: CheckStatusSchema.nullable(),
+      source_reason: external_exports.string().nullable()
+    })
+  ),
+  any_of: external_exports.array(
+    external_exports.strictObject({
+      label: NameSchema,
+      state: ItemStateSchema,
+      member: MemberRefSchema.nullable()
+    })
+  ),
+  evidence: external_exports.array(
+    external_exports.strictObject({
+      purpose: EvidencePurposeSchema,
+      kind: EvidenceKindSchema.nullable(),
+      role: ArtifactRoleSchema.nullable(),
+      state: external_exports.enum(["satisfied", "missing"]),
+      bound_by: external_exports.array(MemberRefSchema)
+    })
+  ),
+  notices: external_exports.array(external_exports.enum(PROFILE_NOTICES))
 });
 
 // ../validation-engine/src/provenance.ts
