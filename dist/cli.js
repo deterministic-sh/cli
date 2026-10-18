@@ -22237,6 +22237,39 @@ var ProfileDigestSchema = external_exports.strictObject({
   algorithm: external_exports.literal("sha256"),
   value: DigestHexSchema
 });
+function unreachable(value) {
+  throw new Error(`unhandled value ${String(value)}`);
+}
+function profileReading(completion, recommendation) {
+  const { action } = recommendation;
+  switch (completion.state) {
+    case "not_applicable":
+      return "not_applicable";
+    case "incomplete":
+      switch (action) {
+        case "reject":
+          return "rejected";
+        case "accept":
+        case "escalate":
+          return "incomplete";
+        default:
+          return unreachable(action);
+      }
+    case "complete":
+      switch (action) {
+        case "accept":
+          return "accepted";
+        case "reject":
+          return "rejected";
+        case "escalate":
+          return "escalated";
+        default:
+          return unreachable(action);
+      }
+    default:
+      return unreachable(completion.state);
+  }
+}
 var PROFILE_ITEM_STATES = [
   "satisfied",
   "failed",
@@ -22965,7 +22998,16 @@ var ErrorEnvelopeBodySchema = external_exports.object({
     // Approved-requirement agent transport refusals (spec 1858 §5): 422, 422 and 409.
     "invalid_revision",
     "domain_mismatch",
-    "state_conflict"
+    "state_conflict",
+    // Validate-time review-profile refusals (spec 1876 §4.2): 422 / 404 / 409 / 422 caller-class
+    // and the 500-class digest mismatch. Mirrors REVIEW_PROFILE_REFUSALS in
+    // apps/web/src/lib/requirements/profile-resolve.ts; a lockstep test reads that source.
+    "profile_version_required",
+    "unknown_profile_version",
+    "withdrawn_profile",
+    "unsupported_profile_format",
+    "profile_digest_mismatch",
+    "profile_domain_mismatch"
   ]),
   message: external_exports.string(),
   correlationId: external_exports.string().optional(),
@@ -24109,8 +24151,8 @@ function red(value, color) {
 function statusColor(value, color) {
   const text = display(value);
   if (!color) return styled(text);
-  if (text === "accept" || text === "pass") return styled(colors.green(text));
-  if (text === "reject" || text === "fail") return styled(colors.red(text));
+  if (text === "accept" || text === "pass" || text === "accepted") return styled(colors.green(text));
+  if (text === "reject" || text === "fail" || text === "rejected") return styled(colors.red(text));
   return styled(colors.yellow(text));
 }
 function asRecord(v) {
@@ -24129,6 +24171,8 @@ function renderReport(report, opts) {
   const lines = [];
   lines.push(safe`${bold2("Validation report", color)}`);
   lines.push(safe`  recommendation: ${statusColor(rec["action"], color)} — ${rec["reason"]}`);
+  const completion = asRecord(r["profile_completion"]);
+  if (Object.keys(completion).length > 0) lines.push(...profileBlock(completion, rec, color));
   if (r["summary"]) {
     const s = asRecord(r["summary"]);
     lines.push(
@@ -24162,6 +24206,43 @@ function renderReport(report, opts) {
   }
   lines.push("");
   return [...lines, ""].join("\n");
+}
+function isMember(members2, value) {
+  return members2.includes(value);
+}
+function profileBlock(completion, rec, color) {
+  const identity = asRecord(completion["profile"]);
+  const state = completion["state"];
+  const action = rec["action"];
+  const reading = isMember(PROFILE_COMPLETION_STATES, state) && isMember(RECOMMENDATION_ACTIONS, action) ? profileReading({ state }, { action }) : "?";
+  const lines = [
+    safe`  profile: ${identity["id"]} ${identity["version"]} — reading: ${statusColor(reading, color)}, completion: ${state}`
+  ];
+  const itemLine = (label, items, render) => {
+    if (items.length === 0) return;
+    lines.push(safe`    ${label}: ${items.map(render).join(", ")}`);
+  };
+  if (state === "incomplete") {
+    const inState = (key, itemState) => asArray(completion[key]).filter((item) => asRecord(item)["state"] === itemState);
+    const check2 = (item) => {
+      const c = asRecord(item);
+      if (typeof c["source_reason"] === "string") return safe`${c["id"]} (${c["source_reason"]})`;
+      if (c["source_status"] === null) return safe`${c["id"]} (absent)`;
+      return safe`${c["id"]}`;
+    };
+    const group = (g) => safe`${asRecord(g)["label"]}`;
+    itemLine("missing checks", inState("checks", "missing"), check2);
+    itemLine("unresolved checks", inState("checks", "unresolved"), check2);
+    itemLine("missing groups", inState("any_of", "missing"), group);
+    itemLine("unresolved groups", inState("any_of", "unresolved"), group);
+    itemLine(
+      "missing evidence",
+      inState("evidence", "missing"),
+      (e) => safe`${asRecord(e)["purpose"]}`
+    );
+  }
+  itemLine("notices", asArray(completion["notices"]), (n) => safe`${n}`);
+  return lines;
 }
 function renderValidateSuccess(wrapper, opts) {
   const { color } = opts;
