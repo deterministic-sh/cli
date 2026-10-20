@@ -23944,6 +23944,9 @@ var AMBIGUOUS_CANONICAL_UNIT_PRECEDENCE = {
 };
 var CANONICAL_UNIT_TO_DIMENSION = buildCanonicalUnitToDimension(CANONICAL_DIMENSION_UNITS, AMBIGUOUS_CANONICAL_UNIT_PRECEDENCE);
 var PHYSICAL_DIMENSION_SET = new Set(PHYSICAL_DIMENSIONS);
+function isPhysicalDimension(value) {
+  return typeof value === "string" && PHYSICAL_DIMENSION_SET.has(value);
+}
 function lookupRule(dimension, canonicalKey2) {
   const rules = RULES[dimension];
   const exactMatch = rules.exact.get(canonicalKey2);
@@ -34975,6 +34978,91 @@ async function safeIngestValidationRequest(request, artifactContents, options) {
   }
 }
 
+// ../validation-engine/src/field-roles.ts
+var ROLE_DIMENSION = new Map(
+  PHYSICAL_DIMENSIONS.map((role) => {
+    const unit2 = CANONICAL_DIMENSION_UNITS[role];
+    const dim2 = parseUnitDimension(unit2);
+    if (dim2 === void 0) {
+      throw new Error(`no dimension registered for role ${role} (unit ${unit2})`);
+    }
+    return [role, dim2];
+  })
+);
+function roleDimension(role) {
+  return ROLE_DIMENSION.get(role);
+}
+function toFieldRolesRecord(raw) {
+  return typeof raw === "object" && raw !== null && !Array.isArray(raw) ? raw : {};
+}
+function assertedFieldRole(fieldName, normalizedUnit, fieldRoles) {
+  if (!Object.hasOwn(fieldRoles, fieldName)) return void 0;
+  const role = fieldRoles[fieldName];
+  if (!isPhysicalDimension(role)) return void 0;
+  if (normalizedUnit === void 0) return { kind: "unnormalized", role };
+  const vector = parseUnitDimension(normalizedUnit);
+  if (vector !== void 0 && dimensionsEqual(vector, roleDimension(role))) {
+    return { kind: "renamed", role };
+  }
+  return { kind: "mismatch", role, unit: normalizedUnit };
+}
+
+// ../validation-engine/src/field-requirements.ts
+var FieldRequirementTableSchema = external_exports.literal("first_primary_table");
+var FieldRequirementSchema = external_exports.discriminatedUnion("kind", [
+  // ≥1 column maps to a PhysicalDimension (a valid `field_roles` entry or the name convention).
+  external_exports.strictObject({
+    kind: external_exports.literal("dimension_role"),
+    table: FieldRequirementTableSchema,
+    override: external_exports.literal("field_roles")
+  }),
+  // ≥1 column mapped as above carries a `normalized_unit`.
+  external_exports.strictObject({
+    kind: external_exports.literal("dimension_unit"),
+    table: FieldRequirementTableSchema,
+    override: external_exports.literal("field_roles")
+  }),
+  // `ordering_field` names a numeric field, or the observed schema has `ordered_by`.
+  external_exports.strictObject({
+    kind: external_exports.literal("ordered_axis"),
+    table: FieldRequirementTableSchema,
+    override: external_exports.literal("ordering_field")
+  })
+]);
+var FieldRequirementsSchema = external_exports.discriminatedUnion("state", [
+  external_exports.strictObject({ state: external_exports.literal("not_declared") }),
+  external_exports.strictObject({
+    state: external_exports.literal("declared"),
+    requirements: external_exports.array(FieldRequirementSchema).refine((list2) => new Set(list2.map((r) => r.kind)).size === list2.length, {
+      message: "a requirement kind may appear at most once"
+    })
+  })
+]);
+function mappedRoleUnits(table, overrides) {
+  const fieldRoles = toFieldRolesRecord(overrides?.["field_roles"]);
+  const units = [];
+  for (const field of table.fields) {
+    const role = assertedFieldRole(field.name, field.normalized_unit, fieldRoles)?.role ?? resolveUnitDimension(field.name);
+    if (role !== void 0) units.push(field.normalized_unit);
+  }
+  return units;
+}
+function isMet(requirement, table, overrides) {
+  switch (requirement.kind) {
+    case "dimension_role":
+      return mappedRoleUnits(table, overrides).length > 0;
+    case "dimension_unit":
+      return mappedRoleUnits(table, overrides).some((unit2) => unit2 !== void 0);
+    case "ordered_axis": {
+      const orderingField = overrides?.["ordering_field"];
+      return typeof orderingField === "string" && table.numeric_fields.includes(orderingField) || table.ordered_by !== void 0;
+    }
+  }
+}
+function firstUnmetFieldRequirement(requirements, table, overrides) {
+  return requirements.find((requirement) => !isMet(requirement, table, overrides));
+}
+
 // ../validation-engine/src/rule-set.ts
 var EvidenceRequirementSchema = external_exports.object({
   kind: EvidenceKindSchema,
@@ -35187,7 +35275,10 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "comparative.benchmark_bias",
@@ -35205,7 +35296,10 @@ var preflight_catalog_default = {
               purpose: "probe_history",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "comparative.benchmark_delta",
@@ -35223,7 +35317,10 @@ var preflight_catalog_default = {
               purpose: "probe_history",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "temporal.bounded_response",
@@ -35235,7 +35332,10 @@ var preflight_catalog_default = {
               purpose: "probe_history",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "consistency.boundary_condition",
@@ -35246,7 +35346,10 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "dimensional.derived_quantity_compatibility",
@@ -35257,7 +35360,10 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "consistency.equation_of_state",
@@ -35268,7 +35374,10 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "conservation.mass_over_time",
@@ -35279,7 +35388,10 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "temporal.monotonicity",
@@ -35291,7 +35403,10 @@ var preflight_catalog_default = {
               purpose: "probe_history",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "structural.no_not_finite_values",
@@ -35302,7 +35417,11 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "declared",
+            requirements: []
+          }
         },
         {
           id: "range.order_of_magnitude",
@@ -35313,7 +35432,10 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "consistency.phase_classification",
@@ -35324,7 +35446,10 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "range.regime_specific_bounds",
@@ -35335,7 +35460,10 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "convergence.residual_magnitude",
@@ -35347,7 +35475,10 @@ var preflight_catalog_default = {
               purpose: "residual_history",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "convergence.residual_trend",
@@ -35359,7 +35490,10 @@ var preflight_catalog_default = {
               purpose: "residual_history",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "structural.sampling_and_ordering",
@@ -35370,7 +35504,17 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "declared",
+            requirements: [
+              {
+                kind: "ordered_axis",
+                table: "first_primary_table",
+                override: "ordering_field"
+              }
+            ]
+          }
         },
         {
           id: "structural.schema_completeness",
@@ -35381,7 +35525,11 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "declared",
+            requirements: []
+          }
         },
         {
           id: "dimensional.si_normalization_sanity",
@@ -35392,7 +35540,11 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "declared",
+            requirements: []
+          }
         },
         {
           id: "temporal.smoothness",
@@ -35404,7 +35556,10 @@ var preflight_catalog_default = {
               purpose: "probe_history",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "structural.type_validity",
@@ -35415,7 +35570,11 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "declared",
+            requirements: []
+          }
         },
         {
           id: "dimensional.unit_consistency",
@@ -35426,7 +35585,22 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "declared",
+            requirements: [
+              {
+                kind: "dimension_role",
+                table: "first_primary_table",
+                override: "field_roles"
+              },
+              {
+                kind: "dimension_unit",
+                table: "first_primary_table",
+                override: "field_roles"
+              }
+            ]
+          }
         }
       ],
       profiles: []
@@ -35447,7 +35621,11 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "declared",
+            requirements: []
+          }
         },
         {
           id: "structural.type_validity",
@@ -35458,7 +35636,11 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "declared",
+            requirements: []
+          }
         },
         {
           id: "structural.no_not_finite_values",
@@ -35469,7 +35651,11 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "declared",
+            requirements: []
+          }
         },
         {
           id: "structural.sampling_and_ordering",
@@ -35480,7 +35666,17 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "declared",
+            requirements: [
+              {
+                kind: "ordered_axis",
+                table: "first_primary_table",
+                override: "ordering_field"
+              }
+            ]
+          }
         },
         {
           id: "dimensional.unit_consistency",
@@ -35491,7 +35687,22 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "declared",
+            requirements: [
+              {
+                kind: "dimension_role",
+                table: "first_primary_table",
+                override: "field_roles"
+              },
+              {
+                kind: "dimension_unit",
+                table: "first_primary_table",
+                override: "field_roles"
+              }
+            ]
+          }
         },
         {
           id: "dimensional.si_normalization_sanity",
@@ -35502,7 +35713,11 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "declared",
+            requirements: []
+          }
         },
         {
           id: "conservation.global_equilibrium",
@@ -35520,7 +35735,10 @@ var preflight_catalog_default = {
               purpose: "reaction_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "conservation.reaction_balance",
@@ -35532,7 +35750,10 @@ var preflight_catalog_default = {
               purpose: "reaction_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "range.stress_vs_allowable",
@@ -35544,7 +35765,10 @@ var preflight_catalog_default = {
               purpose: "stress_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "range.displacement_sanity",
@@ -35556,7 +35780,10 @@ var preflight_catalog_default = {
               purpose: "displacement_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "temporal.modal_frequency_plausibility",
@@ -35568,7 +35795,10 @@ var preflight_catalog_default = {
               purpose: "modal_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "consistency.rigid_body_modes",
@@ -35580,7 +35810,10 @@ var preflight_catalog_default = {
               purpose: "modal_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "range.mesh_quality_bounds",
@@ -35592,7 +35825,10 @@ var preflight_catalog_default = {
               purpose: "mesh_quality_summary",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "consistency.derived_relation",
@@ -35603,7 +35839,10 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "temporal.convergence_indicator",
@@ -35615,7 +35854,10 @@ var preflight_catalog_default = {
               purpose: "mesh_refinement_series",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "range.buckling_load_factor",
@@ -35627,7 +35869,10 @@ var preflight_catalog_default = {
               purpose: "buckling_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "consistency.buckling_spectrum_sanity",
@@ -35639,7 +35884,10 @@ var preflight_catalog_default = {
               purpose: "buckling_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "consistency.buckling_mode_multiplicity",
@@ -35651,7 +35899,10 @@ var preflight_catalog_default = {
               purpose: "buckling_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "range.miner_damage_vs_limit",
@@ -35669,7 +35920,10 @@ var preflight_catalog_default = {
               purpose: "fatigue_result",
               required: false
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "consistency.sn_domain_sanity",
@@ -35681,7 +35935,10 @@ var preflight_catalog_default = {
               purpose: "cycle_histogram",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "consistency.mean_stress_correction_declared",
@@ -35693,7 +35950,10 @@ var preflight_catalog_default = {
               purpose: "cycle_histogram",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "range.damage_life_plausibility",
@@ -35705,7 +35965,10 @@ var preflight_catalog_default = {
               purpose: "fatigue_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         }
       ],
       profiles: [
@@ -35772,7 +36035,11 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "declared",
+            requirements: []
+          }
         },
         {
           id: "structural.type_validity",
@@ -35783,7 +36050,11 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "declared",
+            requirements: []
+          }
         },
         {
           id: "structural.no_not_finite_values",
@@ -35794,7 +36065,11 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "declared",
+            requirements: []
+          }
         },
         {
           id: "structural.sampling_and_ordering",
@@ -35805,7 +36080,17 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "declared",
+            requirements: [
+              {
+                kind: "ordered_axis",
+                table: "first_primary_table",
+                override: "ordering_field"
+              }
+            ]
+          }
         },
         {
           id: "dimensional.unit_consistency",
@@ -35816,7 +36101,22 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "declared",
+            requirements: [
+              {
+                kind: "dimension_role",
+                table: "first_primary_table",
+                override: "field_roles"
+              },
+              {
+                kind: "dimension_unit",
+                table: "first_primary_table",
+                override: "field_roles"
+              }
+            ]
+          }
         },
         {
           id: "dimensional.si_normalization_sanity",
@@ -35827,7 +36127,11 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "declared",
+            requirements: []
+          }
         },
         {
           id: "range.absolute_temperature_floor",
@@ -35838,7 +36142,10 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "range.temperature_material_limit",
@@ -35849,7 +36156,10 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "conservation.energy_balance",
@@ -35861,7 +36171,10 @@ var preflight_catalog_default = {
               purpose: "boundary_heat_balance",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "temporal.steady_state_residual",
@@ -35872,7 +36185,10 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "consistency.bc_completeness",
@@ -35883,7 +36199,10 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "consistency.interface_flux_continuity",
@@ -35895,12 +36214,18 @@ var preflight_catalog_default = {
               purpose: "interface_flux",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "consistency.biot_fourier_regime",
           docs_path: "/docs/domains/thermal/checks/consistency-biot_fourier_regime/",
-          evidence_requirements: []
+          evidence_requirements: [],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "range.htc_plausibility",
@@ -35911,7 +36236,10 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "temporal.transient_monotonicity",
@@ -35922,7 +36250,10 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         },
         {
           id: "range.declared_range_bounds",
@@ -35933,7 +36264,10 @@ var preflight_catalog_default = {
               role: "primary_result",
               required: true
             }
-          ]
+          ],
+          field_requirements: {
+            state: "not_declared"
+          }
         }
       ],
       profiles: []
@@ -36017,6 +36351,12 @@ var PREFLIGHT_CODES = [
     message: "More than one artifact matches an evidence requirement of a profile-required check."
   },
   {
+    code: "missing_required_field",
+    class: "gap",
+    exit: 1,
+    message: "A profile-required check reads a table that lacks a field its declared field requirements need."
+  },
+  {
     code: "conflicting_case_declarations",
     class: "gap",
     exit: 1,
@@ -36033,6 +36373,12 @@ var PREFLIGHT_CODES = [
     class: "notice",
     exit: 0,
     message: "Approved requirements are stored on the server and were not assessed locally."
+  },
+  {
+    code: "field_requirements_not_assessed",
+    class: "notice",
+    exit: 0,
+    message: "These profile-required checks declare no field requirements yet; their fields were not assessed."
   }
 ];
 var ROWS = new Map(PREFLIGHT_CODES.map((row) => [row.code, row]));
@@ -36111,9 +36457,18 @@ async function evaluatePreflight(body, catalog = preflight_catalog_default) {
     });
     return result([refused], domain2, reviewProfile ?? null);
   }
-  const gaps = profile !== void 0 && profileDomain !== void 0 ? profileGaps(request, profile, profileDomain, ingested.summary) : [];
+  const gaps = profile !== void 0 && profileDomain !== void 0 ? profileGaps(request, profile, profileDomain, {
+    summary: ingested.summary,
+    tables: primaryTables(ingested.prepared.evidence),
+    overrides: request.user_check_overrides
+  }) : [];
   if (request.approved_requirements !== void 0) {
     notices.push(finding("approved_requirements_not_assessed"));
+  }
+  if (profile !== void 0 && profileDomain !== void 0) {
+    const notAssessed = notDeclaredChecks(profile, profileDomain);
+    if (notAssessed.length > 0)
+      notices.push(finding("field_requirements_not_assessed", { check_ids: notAssessed }));
   }
   return result([...gaps, ...notices], domain2, reviewProfile ?? null);
 }
@@ -36131,19 +36486,49 @@ function result(findings, domain2, reviewProfile) {
     next: state === "ready" ? "det validate --bundle <path>" : null
   };
 }
-function assessCheck(domain2, checkId, summary) {
+function primaryTables(evidence) {
+  const tables = /* @__PURE__ */ new Map();
+  for (const ev of evidence) {
+    if (ev.structure === "tabular" && ev.role === "primary_result")
+      tables.set(ev.id, ev.schema.finalize());
+  }
+  return tables;
+}
+function assessCheck(domain2, checkId, ctx) {
   const check2 = domain2.checks.find((c) => c.id === checkId);
   if (check2 === void 0)
     throw new Error(`preflight catalog has no check ${checkId} in ${domain2.domain}`);
   const gaps = [];
+  const collected = [];
   for (const requirement of check2.evidence_requirements) {
-    const ids = selectEvidence(requirement, summary).artifact_ids;
+    const ids = selectEvidence(requirement, ctx.summary).artifact_ids;
+    collected.push(...ids);
     if (requirement.required && ids.length === 0)
       gaps.push({ requirement, absent: true, candidates: [] });
     else if (requirement.purpose !== void 0 && ids.length > 1)
       gaps.push({ requirement, absent: false, candidates: ids });
   }
-  return { check: check2, gaps };
+  if (gaps.length > 0 || check2.field_requirements.state !== "declared") return { check: check2, gaps };
+  const artifactId = collected.find((id) => ctx.tables.has(id));
+  if (artifactId === void 0) return { check: check2, gaps };
+  const unmet = firstUnmetFieldRequirement(
+    check2.field_requirements.requirements,
+    ctx.tables.get(artifactId),
+    ctx.overrides?.[checkId]
+  );
+  if (unmet === void 0) return { check: check2, gaps };
+  return {
+    check: check2,
+    gaps,
+    fieldGap: { artifact_id: artifactId, requirement: unmet.kind, override: unmet.override }
+  };
+}
+function notDeclaredChecks(profile, domain2) {
+  const named = /* @__PURE__ */ new Set([
+    ...profile.checks ?? [],
+    ...(profile.any_of ?? []).flatMap((g2) => g2.members)
+  ]);
+  return domain2.checks.filter((c) => named.has(c.id) && c.field_requirements.state === "not_declared").map((c) => c.id);
 }
 function requirementFields(r) {
   return {
@@ -36152,7 +36537,7 @@ function requirementFields(r) {
     ...r.purpose !== void 0 ? { purpose: r.purpose } : {}
   };
 }
-function profileGaps(request, profile, domain2, summary) {
+function profileGaps(request, profile, domain2, ctx) {
   const out = [];
   for (const gate of profile.applies_when ?? []) {
     const value = readPath(request, gate.field);
@@ -36161,35 +36546,39 @@ function profileGaps(request, profile, domain2, summary) {
       out.push(finding("profile_not_applicable", { field: gate.field, values: [...gate.in] }));
   }
   for (const checkId of profile.checks ?? []) {
-    const { check: check2, gaps } = assessCheck(domain2, checkId, summary);
+    const { check: check2, gaps, fieldGap } = assessCheck(domain2, checkId, ctx);
+    const base = { check_ids: [checkId], docs_path: check2.docs_path };
     for (const gap of gaps) {
-      const base = { check_ids: [checkId], docs_path: check2.docs_path };
       const fields = { ...base, ...requirementFields(gap.requirement) };
       out.push(
         gap.absent ? finding("missing_required_artifact", fields) : finding("ambiguous_evidence_selection", { ...fields, values: gap.candidates })
       );
     }
+    if (fieldGap !== void 0)
+      out.push(finding("missing_required_field", { ...base, ...fieldGap }));
   }
   for (const group of profile.any_of ?? []) {
-    const assessed = group.members.map((id) => assessCheck(domain2, id, summary));
-    if (assessed.some(({ gaps }) => gaps.length === 0)) continue;
+    const assessed = group.members.map((id) => assessCheck(domain2, id, ctx));
+    if (assessed.some(({ gaps, fieldGap }) => gaps.length === 0 && fieldGap === void 0)) continue;
     const candidates = assessed.flatMap(
       ({ gaps }) => gaps.flatMap((g2) => g2.absent ? [] : g2.candidates)
     );
-    const members2 = assessed.map(({ check: check2 }) => ({
+    const members2 = assessed.map(({ check: check2, fieldGap }) => ({
       check_id: check2.id,
       docs_path: check2.docs_path,
       purposes: check2.evidence_requirements.flatMap(
         (r) => r.purpose !== void 0 ? [r.purpose] : []
-      )
+      ),
+      ...fieldGap !== void 0 ? { field_gap: fieldGap } : {}
     }));
     const fields = { group: group.label, check_ids: [...group.members], members: members2 };
+    const absent = assessed.some(({ gaps }) => gaps.some((g2) => g2.absent));
     out.push(
-      candidates.length > 0 ? finding("ambiguous_evidence_selection", { ...fields, values: [...new Set(candidates)] }) : finding("missing_required_artifact", fields)
+      candidates.length > 0 ? finding("ambiguous_evidence_selection", { ...fields, values: [...new Set(candidates)] }) : absent ? finding("missing_required_artifact", fields) : finding("missing_required_field", fields)
     );
   }
   const bindings = domain2.checks.flatMap(
-    (c) => c.evidence_requirements.map((r) => selectEvidence(r, summary))
+    (c) => c.evidence_requirements.map((r) => selectEvidence(r, ctx.summary))
   );
   for (const entry of profile.evidence ?? []) {
     if (!bindings.some((b) => bindsEntry(b, entry)))
@@ -36222,6 +36611,19 @@ var PREPARE_HINT_CODES = /* @__PURE__ */ new Set([
   "missing_required_artifact",
   "missing_evidence_purpose"
 ]);
+var FIELD_GAP_SENTENCES = {
+  dimension_role: "no column maps to a physical dimension by its name or a field_roles entry",
+  dimension_unit: "the columns mapped to a physical dimension carry no unit",
+  ordered_axis: "the table declares no ordering axis and no ordering_field names a numeric column"
+};
+function fieldGapLines(checkId, gap, pad, color) {
+  return [
+    safe`${pad}${dim("artifact:", color)} ${gap.artifact_id}`,
+    safe`${pad}${dim("requirement:", color)} ${gap.requirement}`,
+    safe`${pad}${dim("reason:", color)} ${FIELD_GAP_SENTENCES[gap.requirement]}`,
+    safe`${pad}${dim("hint:", color)} set user_check_overrides["${checkId}"].${gap.override}`
+  ];
+}
 function list(items) {
   return items.map((item) => safe`${item}`).join(", ");
 }
@@ -36237,7 +36639,11 @@ function findingLines(f, color) {
   field("kind:", f.kind);
   field("role:", f.role);
   field("ingestion code:", f.ingestion_code);
-  field("artifact:", f.artifact_id);
+  const checkId = f.check_ids?.[0];
+  if (checkId !== void 0 && f.artifact_id !== void 0 && f.requirement !== void 0 && f.override !== void 0) {
+    const gap = { artifact_id: f.artifact_id, requirement: f.requirement, override: f.override };
+    lines.push(...fieldGapLines(checkId, gap, "      ", color));
+  } else field("artifact:", f.artifact_id);
   field("field:", f.field);
   const formatRefusal = f.code === "evidence_refused" && f.values !== void 0;
   if (f.values !== void 0)
@@ -36254,6 +36660,8 @@ function findingLines(f, color) {
     for (const purpose of m4.purposes) {
       lines.push(safe`        ${dim("hint:", color)} det prepare --purpose ${purpose}`);
     }
+    if (m4.field_gap !== void 0)
+      lines.push(...fieldGapLines(m4.check_id, m4.field_gap, "        ", color));
   }
   return lines;
 }
