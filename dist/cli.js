@@ -24038,7 +24038,10 @@ var ColumnSpecSchema = external_exports.strictObject({
   description: external_exports.string().max(MAX_COLUMN_DESCRIPTION_LEN).optional(),
   role: PhysicalDimensionSchema.optional(),
   type: external_exports.string().max(MAX_COLUMN_DESCRIPTION_LEN).optional(),
-  value_dtype: ValueDtypeSchema.optional()
+  value_dtype: ValueDtypeSchema.optional(),
+  // The column the ordering check reads as its axis. Only `true` is accepted so
+  // "not the axis" has one spelling: omit the key.
+  ordering_axis: external_exports.literal(true).optional()
 }).superRefine((spec, ctx) => {
   if (spec.type === void 0 || spec.value_dtype === void 0) return;
   const dtypeFamily = valueDtypeFamily(spec.value_dtype);
@@ -24084,6 +24087,17 @@ var EvidenceItemBaseSchema = external_exports.object({
   value: external_exports.unknown().optional()
 });
 var EvidenceItemSchema = EvidenceItemBaseSchema.superRefine((item, ctx) => {
+  let markedAxes = 0;
+  for (const entry of Object.values(item.schema)) {
+    if (typeof entry === "object" && entry.ordering_axis === true) markedAxes++;
+  }
+  if (markedAxes > 1) {
+    ctx.addIssue({
+      code: external_exports.ZodIssueCode.custom,
+      path: ["schema"],
+      message: "at most one column may be marked ordering_axis"
+    });
+  }
   if (item.value !== void 0) {
     const bytes = inlineValueByteLength(item.value);
     if (bytes > MAX_INLINE_EVIDENCE_VALUE_BYTES) {
@@ -27390,6 +27404,11 @@ var ProgressiveSchema = class {
   // only for names that made it into `_fieldOrder` some other way (i.e. were
   // actually observed in at least one row).
   _valueDtypes = /* @__PURE__ */ new Map();
+  // Declared roles and the declared ordering axis follow the same
+  // no-phantom-fields rule as `_valueDtypes`: `finalize()` emits them only for
+  // observed fields.
+  _declaredRoles;
+  _declaredOrderingAxis;
   get finalized() {
     return this._finalized;
   }
@@ -27436,6 +27455,19 @@ var ProgressiveSchema = class {
    */
   recordValueDtypeMetadata(fieldName, valueDtype) {
     this._valueDtypes.set(fieldName, valueDtype);
+  }
+  /**
+   * The request-wide declared-roles map (`options.fieldRoles`, else
+   * `deriveFieldRolesFromRequest`) unit normalization resolves this artifact's
+   * dimensions under; an observed column it names gets `declared_role`. Read
+   * with `Object.hasOwn` because column names are caller-controlled.
+   */
+  recordDeclaredRoles(fieldRoles) {
+    this._declaredRoles = fieldRoles;
+  }
+  /** The column this artifact's own `ColumnSpec` marked `ordering_axis: true`. */
+  recordDeclaredOrderingAxis(fieldName) {
+    this._declaredOrderingAxis = fieldName;
   }
   /**
    * Feed one observed row. Fields newly seen after row 1 are flagged nullable
@@ -27498,6 +27530,7 @@ var ProgressiveSchema = class {
         numericFields.push(name);
       }
       const valueDtype = this._valueDtypes.get(name);
+      const declaredRole = this._declaredRoles !== void 0 && Object.hasOwn(this._declaredRoles, name) ? this._declaredRoles[name] : void 0;
       fields.push({
         name,
         nullable: state.nullable,
@@ -27506,6 +27539,7 @@ var ProgressiveSchema = class {
         ...state.unit_provenance !== void 0 ? { unit_provenance: state.unit_provenance } : {},
         ...state.type_conversion !== void 0 ? { type_conversion: state.type_conversion } : {},
         ...valueDtype !== void 0 ? { value_dtype: valueDtype } : {},
+        ...declaredRole !== void 0 ? { declared_role: declaredRole } : {},
         value_type: valueType
       });
     }
@@ -27517,11 +27551,13 @@ var ProgressiveSchema = class {
         break;
       }
     }
+    const declaredOrderingAxis = this._declaredOrderingAxis !== void 0 && this._fields.has(this._declaredOrderingAxis) ? this._declaredOrderingAxis : void 0;
     return {
       fields,
       numeric_fields: numericFields,
       row_count: this._rowCount,
-      ...orderedBy !== void 0 ? { ordered_by: orderedBy } : {}
+      ...orderedBy !== void 0 ? { ordered_by: orderedBy } : {},
+      ...declaredOrderingAxis !== void 0 ? { declared_ordering_axis: declaredOrderingAxis } : {}
     };
   }
 };
@@ -28328,13 +28364,14 @@ function resolveFieldDimensionWithFallback({
 }
 
 // ../validation-engine/src/stream-transforms.ts
-function recordDeclaredValueDtypes(item, schema) {
+function recordDeclaredColumnMetadata(item, schema, fieldRoles) {
   for (const [fieldName, entry] of Object.entries(item.schema ?? {})) {
     if (typeof entry !== "object" || entry === null) continue;
-    const valueDtype = entry.value_dtype;
-    if (valueDtype === void 0) continue;
-    schema.recordValueDtypeMetadata(fieldName, valueDtype);
+    if (entry.value_dtype !== void 0)
+      schema.recordValueDtypeMetadata(fieldName, entry.value_dtype);
+    if (entry.ordering_axis === true) schema.recordDeclaredOrderingAxis(fieldName);
   }
+  if (fieldRoles !== void 0) schema.recordDeclaredRoles(fieldRoles);
 }
 var SchemaValidationError = class extends Error {
   constructor(message, field, artifactId) {
@@ -28679,7 +28716,7 @@ var csvFormatParser = async ({
 }) => {
   const byteStream = contentToByteStream(content);
   const schema = new ProgressiveSchema();
-  recordDeclaredValueDtypes(item, schema);
+  recordDeclaredColumnMetadata(item, schema, fieldRoles);
   let rowStream = parseCsvStream(byteStream);
   if (item.schema) {
     rowStream = applyDeclaredSchemaValidationTransform(rowStream, item.schema, item.id);
@@ -28733,7 +28770,7 @@ var hdf5FormatParser = async (ctx) => {
   const { item, content, metadata, claimedUnits, fieldRoles, hdf5RequestBudget } = ctx;
   const byteStream = contentToByteStream(content);
   const schema = new ProgressiveSchema();
-  recordDeclaredValueDtypes(item, schema);
+  recordDeclaredColumnMetadata(item, schema, fieldRoles);
   const datasetPath = parseUriFragment(item.uri);
   let rowStream = parseHdf5Stream2(byteStream, {
     ...datasetPath !== void 0 ? { datasetPath } : {},
@@ -30986,7 +31023,7 @@ var jsonFormatParser = async ({
     };
   }
   const schema = new ProgressiveSchema();
-  recordDeclaredValueDtypes(item, schema);
+  recordDeclaredColumnMetadata(item, schema, fieldRoles);
   let rowStream = parseResult.rows;
   if (item.schema) {
     rowStream = applyDeclaredSchemaValidationTransform(rowStream, item.schema, item.id);
@@ -34505,7 +34542,7 @@ var parquetFormatParser = async ({
 }) => {
   const byteStream = contentToByteStream(content);
   const schema = new ProgressiveSchema();
-  recordDeclaredValueDtypes(item, schema);
+  recordDeclaredColumnMetadata(item, schema, fieldRoles);
   let rowStream = parseParquetStream(
     byteStream,
     {
@@ -34947,7 +34984,8 @@ function finalizeIngestionSummary(prepared) {
       ...ev.purpose !== void 0 ? { purpose: ev.purpose } : {},
       role: ev.role,
       row_count: finalized.row_count,
-      ...finalized.ordered_by !== void 0 ? { ordered_by: finalized.ordered_by } : {}
+      ...finalized.ordered_by !== void 0 ? { ordered_by: finalized.ordered_by } : {},
+      ...finalized.declared_ordering_axis !== void 0 ? { declared_ordering_axis: finalized.declared_ordering_axis } : {}
     };
   });
   return {
@@ -35010,7 +35048,8 @@ function assertedFieldRole(fieldName, normalizedUnit, fieldRoles) {
 // ../validation-engine/src/field-requirements.ts
 var FieldRequirementTableSchema = external_exports.literal("first_primary_table");
 var FieldRequirementSchema = external_exports.discriminatedUnion("kind", [
-  // ≥1 column maps to a PhysicalDimension (a valid `field_roles` entry or the name convention).
+  // ≥1 column maps to a PhysicalDimension (a valid `field_roles` entry, the column's
+  // declared role, or the name convention).
   external_exports.strictObject({
     kind: external_exports.literal("dimension_role"),
     table: FieldRequirementTableSchema,
@@ -35022,7 +35061,8 @@ var FieldRequirementSchema = external_exports.discriminatedUnion("kind", [
     table: FieldRequirementTableSchema,
     override: external_exports.literal("field_roles")
   }),
-  // `ordering_field` names a numeric field, or the observed schema has `ordered_by`.
+  // `ordering_field` names a numeric field; else the declared ordering axis, when
+  // present, is numeric; else the observed schema has `ordered_by`.
   external_exports.strictObject({
     kind: external_exports.literal("ordered_axis"),
     table: FieldRequirementTableSchema,
@@ -35042,7 +35082,7 @@ function mappedRoleUnits(table, overrides) {
   const fieldRoles = toFieldRolesRecord(overrides?.["field_roles"]);
   const units = [];
   for (const field of table.fields) {
-    const role = assertedFieldRole(field.name, field.normalized_unit, fieldRoles)?.role ?? resolveUnitDimension(field.name);
+    const role = assertedFieldRole(field.name, field.normalized_unit, fieldRoles)?.role ?? field.declared_role ?? resolveUnitDimension(field.name);
     if (role !== void 0) units.push(field.normalized_unit);
   }
   return units;
@@ -35055,7 +35095,13 @@ function isMet(requirement, table, overrides) {
       return mappedRoleUnits(table, overrides).some((unit2) => unit2 !== void 0);
     case "ordered_axis": {
       const orderingField = overrides?.["ordering_field"];
-      return typeof orderingField === "string" && table.numeric_fields.includes(orderingField) || table.ordered_by !== void 0;
+      if (typeof orderingField === "string" && table.numeric_fields.includes(orderingField)) {
+        return true;
+      }
+      if (table.declared_ordering_axis !== void 0) {
+        return table.numeric_fields.includes(table.declared_ordering_axis);
+      }
+      return table.ordered_by !== void 0;
     }
   }
 }
@@ -36612,7 +36658,7 @@ var PREPARE_HINT_CODES = /* @__PURE__ */ new Set([
   "missing_evidence_purpose"
 ]);
 var FIELD_GAP_SENTENCES = {
-  dimension_role: "no column maps to a physical dimension by its name or a field_roles entry",
+  dimension_role: "no column maps to a physical dimension through a field_roles entry, a role declared on the column or its name",
   dimension_unit: "the columns mapped to a physical dimension carry no unit",
   ordered_axis: "the table declares no ordering axis and no ordering_field names a numeric column"
 };
