@@ -23519,9 +23519,9 @@ var CLAIM_KINDS = [
   "temporal",
   "consistency",
   // Fatigue check family additions (issue #1177 §1). Dedicated per-claim
-  // kinds so plan.ts:collectResolverIds's kind-level resolver union cannot
-  // widen beyond the intended resolver set (a single template per kind
-  // makes the union degenerate to exactly that template's resolved_by).
+  // kinds so plan.ts:collectResolverIds's kind-level resolver union, which
+  // applies to caller-declared claims only (default claims bind per
+  // template), cannot widen beyond the intended resolver set.
   "fatigue_damage",
   "fatigue_consistency"
 ];
@@ -25103,7 +25103,7 @@ init_limits();
 var ClaimResultSchema = external_exports.object({
   // Same cap as the request-side `ClaimInputSchema.id` — a report claim id is
   // either the caller's own id echoed back or an engine-authored
-  // `default:<kind>` (issue 1476).
+  // `default:<claim template id>` (issue 1476).
   id: external_exports.string().max(MAX_ID_LEN),
   question: external_exports.string(),
   status: CheckStatusSchema,
@@ -35249,6 +35249,9 @@ var CheckTemplateSchema = external_exports.object({
   }
 });
 var ClaimTemplateSchema = external_exports.object({
+  // Public: a default claim's report id is `default:<id>` and describe-domain
+  // lists it, so retiring an id is a breaking change.
+  id: external_exports.string().max(64).regex(/^[a-z][a-z0-9_]*$/),
   kind: ClaimKindSchema,
   description: external_exports.string(),
   resolved_by: external_exports.array(external_exports.string())
@@ -35259,6 +35262,18 @@ var RuleSetSchema = external_exports.object({
   description: external_exports.string(),
   checks: external_exports.array(CheckTemplateSchema),
   claim_templates: external_exports.array(ClaimTemplateSchema)
+}).superRefine((data, ctx) => {
+  const seen = /* @__PURE__ */ new Set();
+  data.claim_templates.forEach((template, index) => {
+    if (seen.has(template.id)) {
+      ctx.addIssue({
+        code: external_exports.ZodIssueCode.custom,
+        path: ["claim_templates", index, "id"],
+        message: `duplicate claim-template id "${template.id}"`
+      });
+    }
+    seen.add(template.id);
+  });
 });
 
 // ../validation-engine/src/plan.ts
