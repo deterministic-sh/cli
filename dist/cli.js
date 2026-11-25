@@ -35295,6 +35295,43 @@ function idsOf(artifacts) {
   return artifacts.map((artifact) => artifact.artifact_id);
 }
 
+// ../validation-engine/src/materials/suggest-ids.ts
+var SUGGESTION_INPUT_CAP = 64;
+var MAX_SUGGESTIONS = 3;
+function suggestionTokens(s3) {
+  return s3.split(/[^a-z0-9]+/).filter((t2) => t2.length >= 2);
+}
+function levenshtein(a, b) {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i += 1) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j += 1) {
+      const substitution = prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1);
+      cur.push(Math.min(prev[j] + 1, cur[j - 1] + 1, substitution));
+    }
+    prev = cur;
+  }
+  return prev[b.length];
+}
+function suggestIds(raw, candidates) {
+  const input2 = raw.trim().toLowerCase().slice(0, SUGGESTION_INPUT_CAP);
+  const inputTokens = new Set(suggestionTokens(input2));
+  const scores = /* @__PURE__ */ new Map();
+  for (const candidate of Object.keys(candidates)) {
+    const id = candidates[candidate];
+    let gradeTokens = 0;
+    let sharedWord = false;
+    for (const token of new Set(suggestionTokens(candidate))) {
+      if (!inputTokens.has(token)) continue;
+      if (/[0-9]/.test(token)) gradeTokens += 1;
+      else sharedWord = true;
+    }
+    const score = 2 * gradeTokens + (sharedWord || levenshtein(input2, candidate) <= 2 ? 1 : 0);
+    if (score > (scores.get(id) ?? 0)) scores.set(id, score);
+  }
+  return [...scores.entries()].sort(([a, sa], [b, sb]) => sb - sa || (a < b ? -1 : 1)).slice(0, MAX_SUGGESTIONS).map(([id]) => id);
+}
+
 // src/generated/preflight-catalog.json
 var preflight_catalog_default = {
   preflight_catalog_version: 1,
@@ -36063,7 +36100,22 @@ var preflight_catalog_default = {
             }
           ]
         }
-      ]
+      ],
+      material_ids: {
+        aluminum_6061_t6: "aluminum_6061_t6",
+        aluminum_7075_t6: "aluminum_7075_t6",
+        copper_c11000: "copper_c11000",
+        inconel_718: "inconel_718",
+        stainless_304: "stainless_304",
+        ss304: "stainless_304",
+        stainless_316: "stainless_316",
+        ss316: "stainless_316",
+        steel_4340: "steel_4340",
+        steel_a36: "steel_a36",
+        a36: "steel_a36",
+        titanium_ti6al4v: "titanium_ti6al4v",
+        ti64: "titanium_ti6al4v"
+      }
     },
     {
       domain: "thermal-simulation",
@@ -36316,7 +36368,22 @@ var preflight_catalog_default = {
           }
         }
       ],
-      profiles: []
+      profiles: [],
+      material_ids: {
+        aluminum_6061_t6: "aluminum_6061_t6",
+        aluminum_7075_t6: "aluminum_7075_t6",
+        copper_c11000: "copper_c11000",
+        inconel_718: "inconel_718",
+        stainless_304: "stainless_304",
+        ss304: "stainless_304",
+        stainless_316: "stainless_316",
+        ss316: "stainless_316",
+        steel_4340: "steel_4340",
+        steel_a36: "steel_a36",
+        a36: "steel_a36",
+        titanium_ti6al4v: "titanium_ti6al4v",
+        ti64: "titanium_ti6al4v"
+      }
     }
   ],
   withdrawn_profiles: []
@@ -36409,10 +36476,16 @@ var PREFLIGHT_CODES = [
     message: "The equilibrium and reaction-balance overrides declare different case values."
   },
   {
+    code: "unknown_material_id",
+    class: "gap",
+    exit: 1,
+    message: "The material id is not in the material registry."
+  },
+  {
     code: "no_review_profile",
     class: "notice",
     exit: 0,
-    message: "The bundle names no review profile; only schema and ingestion were assessed."
+    message: "The bundle names no review profile; schema, ingestion, the material id and per-check evidence readiness were assessed."
   },
   {
     code: "approved_requirements_not_assessed",
@@ -36503,11 +36576,14 @@ async function evaluatePreflight(body, catalog = preflight_catalog_default) {
     });
     return result([refused], domain2, reviewProfile ?? null);
   }
-  const gaps = profile !== void 0 && profileDomain !== void 0 ? profileGaps(request, profile, profileDomain, {
+  const ctx = {
     summary: ingested.summary,
     tables: primaryTables(ingested.prepared.evidence),
     overrides: request.user_check_overrides
-  }) : [];
+  };
+  const materialGap = materialIdGap(request.context.material_id, domainEntry);
+  const gaps = profile !== void 0 && profileDomain !== void 0 ? profileGaps(request, profile, profileDomain, ctx) : [];
+  const checks = domainEntry?.checks.map((c) => readinessOf(assessCheck(domainEntry, c.id, ctx))) ?? [];
   if (request.approved_requirements !== void 0) {
     notices.push(finding("approved_requirements_not_assessed"));
   }
@@ -36516,9 +36592,21 @@ async function evaluatePreflight(body, catalog = preflight_catalog_default) {
     if (notAssessed.length > 0)
       notices.push(finding("field_requirements_not_assessed", { check_ids: notAssessed }));
   }
-  return result([...gaps, ...notices], domain2, reviewProfile ?? null);
+  return result([...materialGap, ...gaps, ...notices], domain2, reviewProfile ?? null, checks);
 }
-function result(findings, domain2, reviewProfile) {
+function materialIdGap(materialId, domain2) {
+  const ids = domain2?.material_ids;
+  if (materialId === void 0 || ids === void 0 || Object.hasOwn(ids, materialId)) return [];
+  return [
+    finding("unknown_material_id", {
+      field: "context.material_id",
+      value: materialId,
+      values: [...suggestIds(materialId, ids)],
+      docs_path: "/docs/concepts/material-registry/"
+    })
+  ];
+}
+function result(findings, domain2, reviewProfile, checks = []) {
   const state = findings.some((f) => f.class === "refusal") ? "refused" : findings.some((f) => f.class === "gap") ? "incomplete" : "ready";
   return {
     preflight_version: 1,
@@ -36529,6 +36617,7 @@ function result(findings, domain2, reviewProfile) {
     domain: domain2,
     review_profile: reviewProfile,
     findings,
+    checks,
     next: state === "ready" ? "det validate --bundle <path>" : null
   };
 }
@@ -36544,7 +36633,7 @@ function assessCheck(domain2, checkId, ctx) {
   const check2 = domain2.checks.find((c) => c.id === checkId);
   if (check2 === void 0)
     throw new Error(`preflight catalog has no check ${checkId} in ${domain2.domain}`);
-  const gaps = [];
+  let gaps = [];
   const collected = [];
   for (const requirement of check2.evidence_requirements) {
     const ids = selectEvidence(requirement, ctx.summary).artifact_ids;
@@ -36554,6 +36643,9 @@ function assessCheck(domain2, checkId, ctx) {
     else if (requirement.purpose !== void 0 && ids.length > 1)
       gaps.push({ requirement, absent: false, candidates: ids });
   }
+  const requirements = check2.evidence_requirements;
+  if (requirements.length > 0 && requirements.every((r) => !r.required) && collected.length === 0)
+    gaps = requirements.map((requirement) => ({ requirement, absent: true, candidates: [] }));
   if (gaps.length > 0 || check2.field_requirements.state !== "declared") return { check: check2, gaps };
   const artifactId = collected.find((id) => ctx.tables.has(id));
   if (artifactId === void 0) return { check: check2, gaps };
@@ -36569,19 +36661,39 @@ function assessCheck(domain2, checkId, ctx) {
     fieldGap: { artifact_id: artifactId, requirement: unmet.kind, override: unmet.override }
   };
 }
+function readinessOf({ check: check2, gaps, fieldGap }) {
+  const evidence_problems = gaps.map((g2) => ({
+    kind: g2.absent ? "missing_artifact" : "ambiguous_evidence",
+    requirement: requirementShape(g2.requirement),
+    artifact_ids: g2.candidates
+  }));
+  const base = { check_id: check2.id, docs_path: check2.docs_path, evidence_problems };
+  const [first] = evidence_problems;
+  if (first !== void 0) return { ...base, readiness: first.kind };
+  if (check2.field_requirements.state !== "declared")
+    return { ...base, readiness: "fields_not_assessed" };
+  if (fieldGap === void 0) return { ...base, readiness: "evidence_ready" };
+  return {
+    ...base,
+    readiness: "missing_field",
+    artifact_id: fieldGap.artifact_id,
+    field_requirement: fieldGap.requirement,
+    override: fieldGap.override
+  };
+}
+function requirementShape(r) {
+  return {
+    kind: r.kind,
+    ...r.role !== void 0 ? { role: r.role } : {},
+    ...r.purpose !== void 0 ? { purpose: r.purpose } : {}
+  };
+}
 function notDeclaredChecks(profile, domain2) {
   const named = /* @__PURE__ */ new Set([
     ...profile.checks ?? [],
     ...(profile.any_of ?? []).flatMap((g2) => g2.members)
   ]);
   return domain2.checks.filter((c) => named.has(c.id) && c.field_requirements.state === "not_declared").map((c) => c.id);
-}
-function requirementFields(r) {
-  return {
-    kind: r.kind,
-    ...r.role !== void 0 ? { role: r.role } : {},
-    ...r.purpose !== void 0 ? { purpose: r.purpose } : {}
-  };
 }
 function profileGaps(request, profile, domain2, ctx) {
   const out = [];
@@ -36595,7 +36707,7 @@ function profileGaps(request, profile, domain2, ctx) {
     const { check: check2, gaps, fieldGap } = assessCheck(domain2, checkId, ctx);
     const base = { check_ids: [checkId], docs_path: check2.docs_path };
     for (const gap of gaps) {
-      const fields = { ...base, ...requirementFields(gap.requirement) };
+      const fields = { ...base, ...requirementShape(gap.requirement) };
       out.push(
         gap.absent ? finding("missing_required_artifact", fields) : finding("ambiguous_evidence_selection", { ...fields, values: gap.candidates })
       );
@@ -36662,6 +36774,27 @@ var FIELD_GAP_SENTENCES = {
   dimension_unit: "the columns mapped to a physical dimension carry no unit",
   ordered_axis: "the table declares no ordering axis and no ordering_field names a numeric column"
 };
+var READINESS_GUIDANCE = {
+  dimension_role: {
+    missing: "no column of the table maps to a physical dimension",
+    fix: "declare role on a column in the evidence schema, or pass field_roles for the check"
+  },
+  dimension_unit: {
+    missing: "a column maps to a dimension but none carries a unit",
+    fix: "declare the column's unit in context.claimed_units, keyed by column name or by role"
+  },
+  ordered_axis: {
+    missing: "the table has no ordering axis",
+    fix: "mark one numeric column ordering_axis: true in the evidence schema, or pass ordering_field for the check"
+  }
+};
+var COUNT_LABELS = [
+  ["evidence_ready", "ready"],
+  ["missing_artifact", "missing artifact"],
+  ["ambiguous_evidence", "ambiguous evidence"],
+  ["missing_field", "missing field"],
+  ["fields_not_assessed", "fields not assessed"]
+];
 function fieldGapLines(checkId, gap, pad, color) {
   return [
     safe`${pad}${dim("artifact:", color)} ${gap.artifact_id}`,
@@ -36691,8 +36824,11 @@ function findingLines(f, color) {
     lines.push(...fieldGapLines(checkId, gap, "      ", color));
   } else field("artifact:", f.artifact_id);
   field("field:", f.field);
+  field("value:", f.value);
   const formatRefusal = f.code === "evidence_refused" && f.values !== void 0;
-  if (f.values !== void 0)
+  if (f.values !== void 0 && f.code === "unknown_material_id")
+    field("closest ids:", f.values.length === 0 ? "none" : list(f.values));
+  else if (f.values !== void 0)
     field(formatRefusal ? "public-route formats:" : "values:", list(f.values));
   field("path:", f.path);
   field("detail:", f.detail);
@@ -36711,6 +36847,70 @@ function findingLines(f, color) {
   }
   return lines;
 }
+function requirementText(r) {
+  const parts = [safe`kind ${r.kind}`];
+  if (r.role !== void 0) parts.push(safe`role ${r.role}`);
+  if (r.purpose !== void 0) parts.push(safe`purpose ${r.purpose}`);
+  return parts.join(", ");
+}
+function problemLines(p, pad, color, also = false) {
+  const label = safe`${also ? "also " : ""}${p.kind === "missing_artifact" ? "missing artifact:" : "ambiguous evidence:"}`;
+  const lines = [safe`${pad}${dim(label, color)} ${requirementText(p.requirement)}`];
+  if (p.kind === "ambiguous_evidence") {
+    lines.push(safe`${pad}  ${dim("candidates:", color)} ${list(p.artifact_ids)}`);
+    lines.push(safe`${pad}  ${dim("fix:", color)} leave one artifact carrying this purpose`);
+  } else if (p.requirement.purpose !== void 0) {
+    lines.push(safe`${pad}  ${dim("hint:", color)} det prepare --purpose ${p.requirement.purpose}`);
+  }
+  return lines;
+}
+function readinessLines(checks, color) {
+  const of = (kind) => checks.filter((c) => c.readiness === kind);
+  const counts = COUNT_LABELS.map(([kind, label]) => safe`${of(kind).length} ${label}`).join(", ");
+  const lines = [
+    "",
+    safe`${bold2("Check readiness", color)}`,
+    safe`  ${counts}`,
+    "  readiness is not a prediction: applicability, parameters, trust gates and physics are judged only by the server"
+  ];
+  const rest = (c, pad) => c.evidence_problems.slice(1).flatMap((p) => problemLines(p, pad, color, true));
+  for (const c of of("missing_field")) {
+    const requirement = c.field_requirement;
+    const guidance = READINESS_GUIDANCE[requirement];
+    lines.push(
+      safe`  - ${bold2(c.check_id, color)} (missing field)`,
+      safe`      ${dim("artifact:", color)} ${c.artifact_id ?? ""}`,
+      safe`      ${dim("requirement:", color)} ${requirement}: ${guidance.missing}`,
+      safe`      ${dim("fix:", color)} ${guidance.fix}`
+    );
+  }
+  for (const c of of("ambiguous_evidence")) {
+    lines.push(safe`  - ${bold2(c.check_id, color)} (ambiguous evidence)`);
+    const [first] = c.evidence_problems;
+    if (first !== void 0) lines.push(...problemLines(first, "      ", color));
+    lines.push(...rest(c, "      "));
+  }
+  const groups = /* @__PURE__ */ new Map();
+  for (const c of of("missing_artifact")) {
+    const [first] = c.evidence_problems;
+    if (first === void 0) continue;
+    const key = requirementText(first.requirement);
+    const group = groups.get(key) ?? { problem: first, checks: [] };
+    group.checks.push(c);
+    groups.set(key, group);
+  }
+  for (const { problem, checks: members2 } of groups.values()) {
+    lines.push(...problemLines(problem, "  ", color));
+    for (const c of members2) lines.push(safe`    - ${c.check_id}`, ...rest(c, "        "));
+  }
+  const byId = (kind, label) => {
+    const ids = of(kind).map((c) => c.check_id);
+    if (ids.length > 0) lines.push(safe`  ${dim(label, color)} ${list(ids)}`);
+  };
+  byId("fields_not_assessed", "fields not assessed:");
+  byId("evidence_ready", "ready:");
+  return lines;
+}
 function renderPreflight(result2, opts) {
   const { color } = opts;
   const profile = result2.review_profile;
@@ -36725,6 +36925,8 @@ function renderPreflight(result2, opts) {
     lines.push("", safe`${bold2("Findings", color)}`);
     for (const f of result2.findings) lines.push(...findingLines(f, color));
   }
+  const checks = result2.checks ?? [];
+  if (checks.length > 0) lines.push(...readinessLines(checks, color));
   if (result2.next !== null) lines.push("", safe`  next: ${result2.next}`);
   return [...lines, ""].join("\n");
 }
@@ -36733,7 +36935,7 @@ function renderPreflight(result2, opts) {
 var preflightCommand = defineCommand({
   meta: {
     name: "preflight",
-    description: "Check a bundle locally for refusals and review-profile evidence gaps; never contacts the server and needs no API key."
+    description: "Check a bundle locally for refusals, an unknown material id, per-check evidence readiness and review-profile gaps; never contacts the server and needs no API key."
   },
   args: {
     bundle: {
