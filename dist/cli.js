@@ -35292,10 +35292,7 @@ function matchEvidenceRequirement(requirement, summary) {
 }
 var selectEvidence = matchEvidenceRequirement;
 function idsOf(artifacts) {
-  return artifacts.map((artifact) => artifact.artifact_id).sort(compareById);
-}
-function compareById(a, b) {
-  return a < b ? -1 : a > b ? 1 : 0;
+  return artifacts.map((artifact) => artifact.artifact_id);
 }
 
 // src/generated/preflight-catalog.json
