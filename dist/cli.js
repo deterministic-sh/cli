@@ -23604,7 +23604,10 @@ var NOT_RUN_REASONS = [
   // more than one candidate artifact. Single-match is the enforced
   // contract; the extract-layer subcase/mode selection (plus the #1033
   // manifest declarations/selection audit trail) is the selection channel.
-  "ambiguous_evidence"
+  "ambiguous_evidence",
+  // A declared context.material_id the material registry does not know, with no
+  // limit override to fall back on; escalates the recommendation like invalid_parameter.
+  "unknown_material_id"
 ];
 var NotRunReasonSchema = external_exports.enum(NOT_RUN_REASONS);
 var TIMEOUT_REASONS = ["handler_budget_exceeded", "dispatcher_guard_exceeded"];
