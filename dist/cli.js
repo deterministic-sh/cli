@@ -23611,7 +23611,8 @@ var NOT_RUN_REASONS = [
   // The data this check assesses was located and its computation is undefined on it: zero
   // rows, fewer rows than the computation needs, an all-zero or zero-sum reference quantity,
   // or a non-finite value / overflow / underflow in an aggregate the verdict depends on.
-  // Classified `degenerate` by `notRunDisposition`; the recommendation does not read it yet.
+  // Classified `degenerate` by `notRunDisposition`, so it turns a passing claim or run uncertain;
+  // the recommendation does not read it yet.
   "degenerate_evidence"
 ];
 var NotRunReasonSchema = external_exports.enum(NOT_RUN_REASONS);
