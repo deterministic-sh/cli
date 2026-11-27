@@ -36123,6 +36123,7 @@ var preflight_catalog_default = {
         }
       ],
       material_ids: {
+        abs_high_impact: "abs_high_impact",
         aluminum_6061_t6: "aluminum_6061_t6",
         aluminum_7075_t6: "aluminum_7075_t6",
         copper_c11000: "copper_c11000",
@@ -36391,6 +36392,7 @@ var preflight_catalog_default = {
       ],
       profiles: [],
       material_ids: {
+        abs_high_impact: "abs_high_impact",
         aluminum_6061_t6: "aluminum_6061_t6",
         aluminum_7075_t6: "aluminum_7075_t6",
         copper_c11000: "copper_c11000",
